@@ -16,6 +16,29 @@ import os
 import time
 from mip import *
 
+def timeAvgEnd(data,in_freq,out_freq):
+    """
+    Averages a dataframe based on a period-ending convention.
+    Args:
+        data (pandas DataFrame): Any pandas dataframe with a datetimeindex as the index.
+
+        freq_in (int): Frequency of the input dataframe in minutes.
+
+        freq_out (int): Frequency of the output dataframe in minutes.
+
+    Returns:
+        data (pandas DataFrame): As input, but with all columns averaged from freq_in to freq_out.
+
+    Created on 26/01/2021 by Bennett Schneider
+
+    """
+
+    data = data.copy()
+    data.index = data.index - pd.Timedelta(in_freq,unit='m') # shift back by one timestep
+    data = data.resample(f"{out_freq}T").mean() # average to the desired freq
+    data.index = data.index + pd.Timedelta(out_freq,unit='m') # shift forward by one timestep
+
+    return data
 
 def BESS_COINOP(rrp,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,write=False,debug=True):
     """
