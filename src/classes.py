@@ -10,17 +10,81 @@ from mip import *
 from analysis_functions import *
 from error_handling import *
 
+class Network(object):
+    def __init__(self,path):
+        """
+        Initialise network object
+        """
+        self.rawData = {}
+        self.procData = {}
+        self.Gens = {}
+        self.rawFreq = {}
+        self.path = path
+        
+    
+    def loadRaw(self,rawData,freq,name):
+        """
+        Load in network data
+        """
+
+        self.rawData[name] = rawData.copy()
+        self.procData[name] = pd.DataFrame() # create empty matching procData entry 
+        self.rawFreq[name] = freq
+
+    
+
+class NEM(Network):
+    """
+    NEM-specific version of Network object.
+    """
+
+    def procPrice(self,freq,region,markets,t0,t1,scenario,modFunc,**kwargs):
+        """
+        Process pricing data. Takes in rawData from NEM.rawData['Price'] and dumps it into self.procData['Price']
+        """
+        try:
+            RRP = self.rawData['Price'].copy()
+        except KeyError:
+            errFunc("NEM.rawData['Price'] doesn't exist! You need to load raw price data into your NEM instance using NEM.load().")
+
+        # Filter by region
+        RRP = RRP[RRP['REGIONID'] == region]
+
+        # Zero by RRP
+        for col in RRP.columns:
+            if col not in markets:
+                RRP[col] = 0
+
+        # Filter by time
+        RRP = RRP.loc[(RRP.index >= t0) & (RRP.index <= t1)]
+
+        # Average to self.freq
+        RRP = timeAvgEnd(RRP[[col for col in RRP if col != 'REGIONID']],self.rawFreq['Price'],freq)
+
+        RRP_mod = modFunc(RRP,**kwargs)
+
+        RRP['modFunc'] = 'Orig'
+
+        RRP = pd.concat([RRP,RRP_mod])
+
+        RRP['REGIONID'] = region
+
+        RRP['Scenario'] = scenario
+
+        RRP['freq'] = freq
+
+        # Add RRP to the procData record
+        self.procData['Price'].append(RRP)
+
+        return RRP
+
 class Gen(object):
-    def __init__(self,path,t0,t1,region,Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP'):
+    def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP'):
         """
         Initialises a Gen object.
 
         Args:
             path (str): Directory you want to save content.
-
-            t0 (datetime): Starting datetime.
-
-            t1 (datetime): Ending datetime.
 
             region (str): Name of the pricing region of the network you want to model.
 
@@ -64,8 +128,6 @@ class Gen(object):
             }
 
         self.path = path
-        self.t0 = t0
-        self.t1 = t1
         self.region = region
         self.Di = Di
         self.Fh = Fh
@@ -154,71 +216,24 @@ class Gen(object):
         # get today's date
         dateStr = exportTimestamp(timeStr=nowStr)
 
-        # Construct name based on dates
-        name_dates = f"{dateStr}_{self.t0.strftime(selfStr)}_{self.t1.strftime(selfStr)}"
-
         # Construct name based on other settings
         name_settings = '_'.join(list(map(str,self.settings.values())))
 
         # Combine
-        name = f"{name_dates}_{name_settings}"
+        name = f"{dateStr}_{name_settings}"
 
         # Add comment
         if comment:
             name += f"_{comment}"
 
         return name
-    
-    def thresh_smooth(self,data,window,thresh,roll=False):
-        """
-
-        """
-        data = data.copy()
-        
-        for col in data.columns:
-            data[col] = thresh_smooth(data[col],self.freq,window,thresh,roll=roll)
-
-        data['modFunc'] = 'thresh_smooth'
-
-        return data
-
-    def constructRRP(self,RRP,freq_in,modFunc,**kwargs):
-        """
-        """
-        RRP = RRP.copy()
-
-        # Filter by region
-        RRP = RRP[RRP['REGIONID'] == self.region]
-
-        # Zero by RRP
-        for col in RRP.columns:
-            if col not in self.markets:
-                RRP[col] = 0
-
-        # Filter by time
-        RRP = RRP.loc[(RRP.index >= self.t0) & (RRP.index <= self.t1)]
-
-        # Average to self.freq
-        RRP = timeAvgEnd(RRP[[col for col in RRP if col != 'REGIONID']],freq_in,self.freq)
-
-        RRP_mod = modFunc(RRP,**kwargs)
-
-        RRP['modFunc'] = 'Orig'
-
-        RRP = pd.concat([RRP,RRP_mod])
-
-        RRP['REGIONID'] = self.region
-        
-        # rrp = rrp.apply(lambda series: modFunc(series,**kwargs))
-
-        return RRP
 
 class BESS(Gen):
     def __init__(self,path,t0,t1,region,Di=5,Fh=0.25,Fr=0.2,freq=30,scenario='RRP',Smax=2):
         """
 
         """
-        super(BESS,self).__init__(path,t0,t1,region,Di=Di,Fh=Fh,Fr=Fr,scenario=scenario)
+        super(BESS,self).__init__(path,t0,t1,region,Di=Di,Fh=Fh,Fr=Fr,freq=freq,scenario=scenario)
         self.Smax = Smax
         self.settings.update(
             {
@@ -226,11 +241,60 @@ class BESS(Gen):
             }
         )
 
-    def optDispatch(self,RRP,m,freq_in=5,debug=False):
+    def optDispatch(self,Network,m,t0,t1,debug=False,modFunc=None,**kwargs):
         """
-        
+        Uses the metadata stored in the caller to set the inputs for horizonDispatch, which optimises the BESS based on
+        RRP, where RRP contains both the original and
+
+        Args:
+            t0 (datetime): Starting datetime.
+
+            t1 (datetime): Ending datetime. 
         """
-       
+
+        try:
+            nPrice = Network.procData['Price'].copy()
+
+            # logic required to slice out the correct data from the network price record
+            logic = (nPrice['REGIONID'] == self.region) & \
+                    (nPrice['scenario'] == self.scenario) & \
+                    (nPrice['freq'] == self.freq) & \
+                    (nPrice.index > t0) & \
+                    (nPrice.index <= t1)
+
+            # This is how long the result should be if all the timestamps are present
+            expLen = int((t1 - t0).total_seconds()/60/self.freq)
+            
+            if modFunc:
+                # Additional logic required to pull the modified pric record
+                mod_logic = nPrice['modFunc'] == modFunc.__name__
+
+                # use the logic to slice the data
+                rrp_actual = nPrice[logic & mod_logic]
+
+                # Raise an error if we don't have the right amount of data
+                if len(rrp_actual) != expLen:
+                    raise IndexError
+            
+            orig_logic = nPrice['modFunc'] == 'Orig'
+            # use the logic to slice the data
+            rrp = nPrice[logic & orig_logic]
+
+            # Raise an error if we don't have the right amount of data
+            if len(rrp) != expLen:
+                raise IndexError
+
+        except IndexError:      
+            # Create our input data and store it in a network object
+            rrp_mod = Network.procPrice(self.freq,self.region,self.markets,t0,t1,self.scenario,modFunc,**kwargs)
+
+        rrp = rrp_mod[rrp_mod['modFunc'] == 'Orig'] # slice of non-modded rrp
+
+        # If modFunc was passed, slice that out as well and assign as rrp_actual, otherwise set to None
+        if modFunc:
+            rrp_actual = rrp_mod[rrp_mod['modFunc'] == modFunc.__name__] # slice of modded rrp
+        else:
+            rrp_actual = None
 
         # Get the dispatch interval
         if type(self.Di) == str: # if a string, should be of the form '/num'
@@ -245,9 +309,9 @@ class BESS(Gen):
             Fh = self.Fh # otherwise, interpret as number of hours
 
 
-        horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_actual=None)
+        results = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_actual=rrp_actual)
 
         # Return the RRP signal passed through the optimiser as well as the one that is evaluated. Return as a stacked dataframe where
         # the original is flagged with the word 'Orig' and the one from the optimiser is flagged according to the algorithm used.
 
-        return results,RRPout
+        return results

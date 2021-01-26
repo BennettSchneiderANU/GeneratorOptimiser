@@ -1138,7 +1138,7 @@ def dictFilt(df,selectDict):
     return df_filt
 
 # def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
-def thresh_smooth(rdata,freq,window,thresh,roll=False):
+def thresh_smooth(data,freq,window,thresh,roll=False):
     """
     Implements a smoothing function that sets the value of data to the average value across a rolling 
     window if the differential across that rolling window is < thresh.
@@ -1147,7 +1147,7 @@ def thresh_smooth(rdata,freq,window,thresh,roll=False):
             RRP_6t,t∈h,|max⁡(RRP_6t)-min(RRP_6t)| >= P
     Args:
         # rdata (pandas Series or pandas DataFrame): Any pandas Series
-        rdata (pandas Series): Any pandas Series
+        data (pandas DataFrame): Any pandas DataFrame
         
         freq (int): Frequency of the data in mins
         
@@ -1164,29 +1164,43 @@ def thresh_smooth(rdata,freq,window,thresh,roll=False):
     Created on 13/11/2020 by Bennett Schneider
     
     """
-    rdata = rdata.copy()
-    # rdata.name = col
-    # rname = col
+    data = data.copy()
     
-    try:
-        rdata = rdata.to_frame()
-    except AttributeError:
-        pass
+    DATA = []
+    for col in data.columns:
+        rdata = data[col]
+        rdata.name = col
+        # rname = col
+        
+        try:
+            rdata = rdata.to_frame()
+        except AttributeError:
+            pass
+        
+        rdata.index = rdata.index - pd.Timedelta(minutes=freq)
+        
+        if roll:
+            # rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=True))
+            rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=True),raw=True)
+        else:
+            rdata['group'] = [i//window for i in range(len(rdata))] # set up a grouping set
+            # breakpoint()
+            # rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=False))
+            rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=False),raw=True)
+        # rdata = rdata[[rname]]
+
+        DATA.append(rdata)
+
+    # concatenate the series objects 
+    data = pd.concat(DATA,axis=1)
+
+    # shift the index
+    data.index = rdata.index + pd.Timedelta(minutes=freq)
     
-    rdata.index = rdata.index - pd.Timedelta(minutes=freq)
-    
-    if roll:
-        # rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=True))
-        rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=True),raw=True)
-    else:
-        rdata['group'] = [i//window for i in range(len(rdata))] # set up a grouping set
-        # breakpoint()
-        # rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=False))
-        rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=False),raw=True)
-    # rdata = rdata[[rname]]
-    rdata.index = rdata.index + pd.Timedelta(minutes=freq)
-    
-    return rdata
+    # add a new column to identify the new data based on the name of the function
+    data['modFunc'] = thresh_smooth.__name__
+
+    return data
     
     
 # def thresh_flat(dataSlice,thresh,rname,roll):
