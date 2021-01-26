@@ -16,6 +16,35 @@ import os
 import time
 from mip import *
 
+
+def exportTimestamp(timeStr="%Y%m%d"):
+    """
+    Gets the current Datetime as a Pandas Datetime object and returns a formatted
+    string in any desired format.
+
+    Args:
+        timeStr (str. Default=%Y%m%d): Defines the desired form of the time-stamp string in standard 
+        strftime format:
+            %Y -> year
+            %m -> month
+            %d -> day
+            %H -> hour
+            %M -> minute
+        Default returns current time as yyyymmdd. 
+
+    Returns:
+        dateStr (str): A string giving the current datetime in the form of timeStr.
+    
+    Recommended use of this function is to timestamp files exported using the toolbox.
+
+    Created on 27/02/2019 by Bennett Schneider
+    """
+
+    time = pd.Timestamp.now() # get the current timestamp
+    dateStr = time.strftime(timeStr) # conver to desired format 
+
+    return dateStr
+
 def timeAvgEnd(data,in_freq,out_freq):
     """
     Averages a dataframe based on a period-ending convention.
@@ -40,322 +69,322 @@ def timeAvgEnd(data,in_freq,out_freq):
 
     return data
 
-def BESS_COINOP(rrp,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,write=False,debug=True):
-    """
-    Uses the mip COIN-OP linear solver to perform a linear optimisation of a battery energy storage system (BESS)
-    dispatch strategy, based on a price curve and BESS energy storage capacity and efficiency.
+# def BESS_COINOR(rrp,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,write=False,debug=True):
+#     """
+#     Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
+#     dispatch strategy, based on a price curve and BESS energy storage capacity and efficiency.
     
-    Args:
-        rrp (pandas Series): Index should be a DatetimeIndex (although it doesn't HAVE to be). Values must be market prices in $/MWh.
+#     Args:
+#         rrp (pandas Series): Index should be a DatetimeIndex (although it doesn't HAVE to be). Values must be market prices in $/MWh.
         
-        freq (int. Default=30): Frequency of your rrp time-series in minutes.
+#         freq (int. Default=30): Frequency of your rrp time-series in minutes.
         
-        sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
+#         sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
         
-        st0 (float. Default=2): Starting capacity of your BESS in hours.
+#         st0 (float. Default=2): Starting capacity of your BESS in hours.
         
-        eta (float. Default=0.8): Round-trip efficiency of your BESS.
+#         eta (float. Default=0.8): Round-trip efficiency of your BESS.
         
-        rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
-            This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+#         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
+#             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
         
-        write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
-            This will let the function write the results of the optimisation to that location in lp format.
+#         write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
+#             This will let the function write the results of the optimisation to that location in lp format.
             
-        debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
+#         debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
     
-    Returns:
-        results (pandas DataFrame): Index matches that of rrp. Columns are:
-          - dt_MW -> Discharge rate in MW. Charging presented as a negative value.
-          - st_MWh -> State of charge in MWh
-          - Profit_$ -> Merchant profit earned in each timestamp
-          - RRP_$/MWh -> Regional Reference Price of the given region.
+#     Returns:
+#         results (pandas DataFrame): Index matches that of rrp. Columns are:
+#           - dt_MW -> Discharge rate in MW. Charging presented as a negative value.
+#           - st_MWh -> State of charge in MWh
+#           - Profit_$ -> Merchant profit earned in each timestamp
+#           - RRP_$/MWh -> Regional Reference Price of the given region.
     
-    Use this function to determine the optimal bidding strategy for a price-taking BESS over a given forecasted time-horizon,
-    as denoted by rrp. i.e. to calculate the optimal arbitrage revenue.
+#     Use this function to determine the optimal bidding strategy for a price-taking BESS over a given forecasted time-horizon,
+#     as denoted by rrp. i.e. to calculate the optimal arbitrage revenue.
     
-    Created on 14/04/2020 by Bennett Schneider
+#     Created on 14/04/2020 by Bennett Schneider
         
-    """
+#     """
     
-    rrpList = list(rrp) # make rrp a list so can use in optimiser
+#     rrpList = list(rrp) # make rrp a list so can use in optimiser
     
-    hr_frac = freq/60 # convert freq to fraction of hours
+#     hr_frac = freq/60 # convert freq to fraction of hours
     
-    n = len(rrp) # Get the length of the optimisation
+#     n = len(rrp) # Get the length of the optimisation
     
-    # Initialise the maximisation model
-    m = Model(sense='MAX')
+#     # Initialise the maximisation model
+#     m = Model(sense='MAX')
     
-    #########################################
-    ############# Add variables #############
-    #########################################
-    # ct = [m.add_var(name=f'ct_{i}',lb=-1,ub=0) for i in range(n)] # charging rate at time, t. Ratio of max charge rate (MW)
-    dt = [m.add_var(name=f'dt_{i}',lb=-1,ub=1) for i in range(n)] # discharging rate at time, t. Ratio of max charge rate (MW)
-    # bin = [m.add_var(name=f'bin_{i}',var_type=BINARY) for i in range(n)] # Charge/discharge binary
-    st = [m.add_var(name=f'st_{i}',lb=0,ub=sMax) for i in range(n)] # storage level at time, t. Hours
+#     #########################################
+#     ############# Add variables #############
+#     #########################################
+#     # ct = [m.add_var(name=f'ct_{i}',lb=-1,ub=0) for i in range(n)] # charging rate at time, t. Ratio of max charge rate (MW)
+#     dt = [m.add_var(name=f'dt_{i}',lb=-1,ub=1) for i in range(n)] # discharging rate at time, t. Ratio of max charge rate (MW)
+#     # bin = [m.add_var(name=f'bin_{i}',var_type=BINARY) for i in range(n)] # Charge/discharge binary
+#     st = [m.add_var(name=f'st_{i}',lb=0,ub=sMax) for i in range(n)] # storage level at time, t. Hours
 
-    #########################################
-    ############ Add constraints ############
-    #########################################
-    for i in range(1,n):
-        # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
-        # such a constraint.
-        # Instead, embed the round trip efficiency into the storage cap. Essentially storage level represents the 'available' energy to be exported
-        m += st[i] - st[i-1] + hr_frac*eta*dt[i] == 0, f'storage_level_{i}' 
+#     #########################################
+#     ############ Add constraints ############
+#     #########################################
+#     for i in range(1,n):
+#         # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
+#         # such a constraint.
+#         # Instead, embed the round trip efficiency into the storage cap. Essentially storage level represents the 'available' energy to be exported
+#         m += st[i] - st[i-1] + hr_frac*eta*dt[i] == 0, f'storage_level_{i}' 
 
-        # Other things I tried but did not work!
-        # When bin[i] = 0, we are charging. When bin[i] = 1, we are discharging!
-        # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*ct[i] + (1/eta_oneWay)*dt[i]) == 0, f'storage_level_{i}'
-        # m += st[i] - st[i-1] + eta*hr_frac*(1*ct[i] + 1*dt[i]) == 0, f'storage_level_{i}'
-        # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*dt[i]*(bin[i] - 1) + (1/eta_oneWay)*dt[i]*bin[i]) == 0, f'storage_level_{i}'
-        # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*dt[i] + (1/eta_oneWay)*dt[i]) == 0, f'storage_level_{i}'
+#         # Other things I tried but did not work!
+#         # When bin[i] = 0, we are charging. When bin[i] = 1, we are discharging!
+#         # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*ct[i] + (1/eta_oneWay)*dt[i]) == 0, f'storage_level_{i}'
+#         # m += st[i] - st[i-1] + eta*hr_frac*(1*ct[i] + 1*dt[i]) == 0, f'storage_level_{i}'
+#         # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*dt[i]*(bin[i] - 1) + (1/eta_oneWay)*dt[i]*bin[i]) == 0, f'storage_level_{i}'
+#         # m += st[i] - st[i-1] + hr_frac*(eta_oneWay*dt[i] + (1/eta_oneWay)*dt[i]) == 0, f'storage_level_{i}'
 
-    m += st[0] == st0, 'initial_condition'
+#     m += st[0] == st0, 'initial_condition'
      
-    #########################################
-    ############## Objective ################
-    #########################################
-    m.objective = xsum(rrpList[i]*dt[i] for i in range(n))
+#     #########################################
+#     ############## Objective ################
+#     #########################################
+#     m.objective = xsum(rrpList[i]*dt[i] for i in range(n))
     
-    #########################################
-    ############## Optimise #################
-    #########################################
-    m.optimize()
-    if debug:
-        print(f'status: {m.status} \nprofit {m.objective_value}')
+#     #########################################
+#     ############## Optimise #################
+#     #########################################
+#     m.optimize()
+#     if debug:
+#         print(f'status: {m.status} \nprofit {m.objective_value}')
     
-    if write:
-        m.write(write)
+#     if write:
+#         m.write(write)
 
-    #########################################
-    ############ Gather Results #############
-    #########################################
-    results = pd.DataFrame(index=rrp.index)
-    res_dict = {r'dt_MW':dt,r'st_MWh':st}
-    res_dataDict = {}
+#     #########################################
+#     ############ Gather Results #############
+#     #########################################
+#     results = pd.DataFrame(index=rrp.index)
+#     res_dict = {r'dt_MW':dt,r'st_MWh':st}
+#     res_dataDict = {}
     
-    for key,var in res_dict.items():
-        myVar = [v.x for v in var]
-        res_dataDict[key] = myVar
+#     for key,var in res_dict.items():
+#         myVar = [v.x for v in var]
+#         res_dataDict[key] = myVar
         
-    results = pd.DataFrame(res_dataDict,index=rrp.index)*rMax # scale by rMax
+#     results = pd.DataFrame(res_dataDict,index=rrp.index)*rMax # scale by rMax
 
-    results = pd.concat([results,rrp.to_frame(r'RRP_$/MWh')],axis=1)
-    results[r'Profit_$'] = results[r'RRP_$/MWh']*results[r'dt_MW']*hr_frac
+#     results = pd.concat([results,rrp.to_frame(r'RRP_$/MWh')],axis=1)
+#     results[r'Profit_$'] = results[r'RRP_$/MWh']*results[r'dt_MW']*hr_frac
     
-    return results
+#     return results
 
-def BESS_COINOP2(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,write=False,debug=True):
-    """
-    Uses the mip COIN-OP linear solver to perform a linear optimisation of a battery energy storage system (BESS)
-    dispatch strategy, based on the energy and FCAS price curves, BESS energy storage capacity, and efficiency. 
+# def BESS_COINOR2(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,write=False,debug=True):
+#     """
+#     Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
+#     dispatch strategy, based on the energy and FCAS price curves, BESS energy storage capacity, and efficiency. 
     
-    Args:
-        rrp (pandas DataFrame): Index should be a DatetimeIndex (although it doesn't HAVE to be). Columns are the names of each of the energy and FCAS
-            markets, as shown in the AEMO tables. Values for RRP must be market prices in $/MWh. Values for FCAS must be in $/MW/hr.
+#     Args:
+#         rrp (pandas DataFrame): Index should be a DatetimeIndex (although it doesn't HAVE to be). Columns are the names of each of the energy and FCAS
+#             markets, as shown in the AEMO tables. Values for RRP must be market prices in $/MWh. Values for FCAS must be in $/MW/hr.
 
-        m (MIP model): An empty model object.
+#         m (MIP model): An empty model object.
         
-        freq (int. Default=30): Frequency of your rrp time-series in minutes.
+#         freq (int. Default=30): Frequency of your rrp time-series in minutes.
         
-        sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
+#         sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
         
-        st0 (float. Default=2): Starting capacity of your BESS in hours.
+#         st0 (float. Default=2): Starting capacity of your BESS in hours.
         
-        eta (float. Default=0.8): Round-trip efficiency of your BESS.
+#         eta (float. Default=0.8): Round-trip efficiency of your BESS.
         
-        rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
-            This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+#         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
+#             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
 
-        regDisFrac (float. Default=0.2): Fraction of enabled FCAS reg that is assumed to be dispatched. More research needed on this value.
+#         regDisFrac (float. Default=0.2): Fraction of enabled FCAS reg that is assumed to be dispatched. More research needed on this value.
         
-        write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
-            This will let the function write the results of the optimisation to that location in lp format.
+#         write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
+#             This will let the function write the results of the optimisation to that location in lp format.
             
-        debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
+#         debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
     
-    Returns:
-        results (pandas DataFrame): Index matches that of rrp. Columns are:
-          - dt_MW -> Discharge rate in MW. Charging presented as a negative value.
-          - st_MWh -> State of charge in MWh
-          - Profit_$ -> Merchant profit earned in each timestamp
-          - RRP_$/MWh -> Regional Reference Price of the given region.
+#     Returns:
+#         results (pandas DataFrame): Index matches that of rrp. Columns are:
+#           - dt_MW -> Discharge rate in MW. Charging presented as a negative value.
+#           - st_MWh -> State of charge in MWh
+#           - Profit_$ -> Merchant profit earned in each timestamp
+#           - RRP_$/MWh -> Regional Reference Price of the given region.
     
-    Use this function to determine the optimal bidding strategy for a price-taking BESS over a given forecasted time-horizon,
-    as denoted by rrp.
+#     Use this function to determine the optimal bidding strategy for a price-taking BESS over a given forecasted time-horizon,
+#     as denoted by rrp.
     
-    Created on 14/04/2020 by Bennett Schneider
+#     Created on 14/04/2020 by Bennett Schneider
         
+#     """
+
+#     # Define the key constraining constants based on rmax
+#     maxAvail = 2                                      # Effective RReg FCAS MaxAvail
+#     enablementMax = 1                                   # Enablement Max. Assume same for all FCAS
+#     enablementMin = -1                                  # Enablement Min. Assume same for all FCAS
+#     lowBreakpoint = 1                                   # Low breakpoint
+#     highBreakpoint = -1                                 # High breakpoint
+#     lowerSlope = (lowBreakpoint - enablementMin)/maxAvail  # Upper/Lower Slope Coeff
+#     upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
+
+#     # make rrp a list so can use in optimiser
+#     enRRP = list(rrp['RRP']) # Energy rrp
+#     regRaiseRRP = list(rrp['RAISEREGRRP'])
+#     regLowerRRP = list(rrp['LOWERREGRRP'])
+#     contRaiseRRP = list(rrp[['RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP']].sum(axis=1)) # Sum of the contingency raise market
+#     contLowerRRP = list(rrp[['LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']].sum(axis=1)) # Sum of the contingency lower market
+    
+#     hr_frac = freq/60 # convert freq to fraction of hours
+    
+#     n = len(rrp) # Get the length of the optimisation
+    
+#     #########################################
+#     ############# Add variables #############
+#     #########################################
+
+#     dt = [m.add_var(name=f'dt_{i}',lb=-1,ub=1) for i in range(n)] # discharging rate at time, t. Ratio of max charge rate (MW)
+
+#     regDt = [m.add_var(name=f'regDt_{i}',lb=-1,ub=1) for i in range(n)] # Dispatched FCAS reg discharge rate, t. Ratio of max charge rate (MW)
+
+#     st = [m.add_var(name=f'st_{i}',lb=0,ub=sMax) for i in range(n)] # storage level at time, t. Hours
+    
+#     Reg_Rt = [m.add_var(name=f'Reg_Rt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Regulation FCAS raise at time, t.
+#     Reg_Lt = [m.add_var(name=f'Reg_Lt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Regulation FCAS lower at time, t.
+
+#     Cont_Rt = [m.add_var(name=f'Cont_Rt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Contingency FCAS raise at time, t.
+#     Cont_Lt = [m.add_var(name=f'Cont_Lt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Contingency FCAS lower at time, t.
+
+
+    
+#     #########################################
+#     ############ Add constraints ############
+#     #########################################
+#     for i in range(1,n):
+#         # Force dispatch commands to 0 if their market is not represented to avoid perverse storage behaviour
+#         if sum(enRRP) == 0:
+#             m += dt[i] == 0, f'energy_market_{i}'
+
+#         if sum(regRaiseRRP) == 0:
+#             m += Reg_Rt[i] == 0, f'RegRaise_market_{i}'
+
+#         if sum(regLowerRRP) == 0:
+#             m += Reg_Lt[i] == 0, f'RegLower_market_{i}'
+
+#         if sum(contRaiseRRP) == 0:
+#             m += Cont_Rt[i] == 0, f'ContRaise_market_{i}'
+
+#         if sum(contLowerRRP) == 0:
+#             m += Cont_Lt[i] == 0, f'ContLower_market_{i}'
+
+#         # Fraction of FCAS reg raise/lower that is dispatched. Calculate as a ratio between what is charged and discharged such that regDisFrac*Raise is dispatched if all raise,
+#         # regDisFrac*Lower if all lower, and 0 if Raise = Lower. Linear interp in between
+#         m += regDt[i] == regDisFrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{i}'
+
+#         # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
+#         # such a constraint.
+#         # Instead, embed the round trip efficiency into the storage cap. Essentially storage level represents the 'available' energy to be exported
+
+#         # m += st[i] - st[i-1] + eta*(hr_frac*(dt[i] + regDt[i])) == 0, f'storage_level_{i}' # Assume enabled FCAS contingency never gets dispatched, but that reg does, effectively regDisFrac% of the time
+#         m += st[i] - st[i-1] + eta*hr_frac*(dt[i] + regDt[i]) == 0, f'storage_level_{i}' # The optimiser abuses the power of having a deterministic regDt. Accordingly, ensure regDisFrac is set small.
+
+#         # Apply FCAS reg raise constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
+#         # # m += Reg_Rt[i] <= maxAvail, f"RegRaise_cap_{i}"                                             # Effective RReg FCAS MaxAvail
+#         m += Reg_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_RegRaise_cap_{i}"             # (Effective RReg EnablementMax - Energy Target) / Upper Slope Coeff RReg
+#         # # m += Reg_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegRaise_cap_{i}"             # (Energy Target - Effective RReg EnablementMin) / Lower Slope Coeff RReg. (Lower slope is undefined for raise)
+#         m += Reg_Rt[i] <= (enablementMax - dt[i] - upperSlope*Cont_Rt[i]), f"RegRaise_jointCap_{i}" # Offer Cont. Raise EnablementMax - Energy Target - (Upper Slope Coeff Cont. Raise x Cont. Raise Target)
+#         # # m += Reg_Rt[i] >= 0, f"RegRaise_floor_{i}"                                                  # if < 0, then it's reg lower, not raise
+#         # m += st[i] - ((Reg_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"RegRaise_storeCap_{i}"                         # Must always have enough storage to be dispatched for the entire period
+
+#         # Apply FCAS reg lower constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
+#         # # m += Reg_Lt[i] <= maxAvail, f"RegLower_cap_{i}"                                              # Effective LReg FCAS MaxAvail
+#         # # m += Reg_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_RegLower_cap_{i}"              # (Effective LReg EnablementMax - Energy Target) / Upper Slope Coeff LReg. (Upper slope is undefined for lower)
+#         m += Reg_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegLower_cap_{i}"             # (Energy Target - Effective LReg EnablementMin) / Lower Slope Coeff LReg
+#         m += Reg_Lt[i] <= (-enablementMin + dt[i] - lowerSlope*Cont_Lt[i]), f"RegLower_jointCap_{i}"  # Offer Cont. Lower EnablementMax - Energy Target - (Lower Slope Coeff Cont. Raise x Cont. Lower Target)
+#         # # m += Reg_Lt[i] >= 0, f"RegLower_floor_{i}"                                                   # if < 0, then it's reg raise, not lower
+#         # m += st[i] + (Reg_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"RegLower_storeCap_{i}"                       # Must always have enough storage to be dispatched for the entire period
+
+#         # Apply FCAS contingecy raise constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
+#         # # m += Cont_Rt[i] <= maxAvail, f"ContRaise_cap_{i}"                                   # Effective RCont FCAS MaxAvail
+#         m += Cont_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_ContRaise_cap_{i}"   # (Offer Rxx EnablementMax - Energy Target) / Upper Slope Coeff Rxx
+#         # # m += Cont_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContRaise_cap_{i}"   # (Energy Target - Offer Rxx EnablementMin) / Lower Slope Coeff Rxx. (Lower slope is undefined for raise)
+#         # # m += Cont_Rt[i] <= (enablementMax - dt[i] - Reg_Rt[i])/upperSlope                 # (Offer Rxx EnablementMax - Energy Target - RReg Target) / Upper Slope Coeff Rxx # replicated above
+#         # # m += Cont_Rt[i] >= 0, f"ContRaise_floor_{i}"                                        # if < 0, then it's cont lower, not raise
+#         # m += st[i] - ((Cont_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"ContRaise_storeCap_{i}"               # Must always have enough storage to be dispatched for the entire period
+
+#         # Apply FCAS contingecy lower constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
+#         # # m += Cont_Lt[i] <= maxAvail, f"ContLower_cap_{i}"                                   # Effective LCont FCAS MaxAvail
+#         # # m += Cont_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_ContLower_cap_{i}"   # (Offer Lxx EnablementMax - Energy Target) / Upper Slope Coeff Lxx. (Upper slope is undefined for
+#         #  lower)
+#         m += Cont_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContLower_cap_{i}"  # (Energy Target - Offer Lxx EnablementMin) / Lower Slope Coeff Lxx
+#         # # m += Cont_Lt[i] <= (enablementMax + dt[i] - Reg_Lt[i])/lowerSlope                 # (Offer Lxx EnablementMax - Energy Target - LReg Target) / Lower Slope Coeff Lxx # replicated above
+#         # # m += Cont_Lt[i] >= 0, f"ContLower_floor_{i}"                                        # if < 0, then it's cont raise, not lower
+#         # m += st[i] + (Cont_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"ContLower_storeCap_{i}"            # Must always have enough storage to be dispatched for the entire period
+        
+
+#         # Joint storage capacity constraint (energy, reg, and cont).
+#         m += st[i] >= (hr_frac/eta)*((Reg_Rt[i] + dt[i]) + 2*(Cont_Rt[i])), f"Raise_jointStorageCap_{i}" # assume that energy, reg, and contingency raise are all dispatched at one. Cont can last up to 10mins, not 5
+#         m += sMax >= st[i] + eta*hr_frac*((Reg_Lt[i] - dt[i]) + 2*Cont_Lt[i]), f"Lower_jointStorageCap_{i}" # same as above, reverse signs for reg an cont, but keep same sign for dt
+
+
+
+#     m += st[0] == st0, 'initial_condition'
+    
+#     #########################################
+#     ############## Objective ################
+#     #########################################
+#     # This first, commented-out constraint includes the revenue from FCAS Reg, which are never guaranteed. So we should definitely not optimise for it (even though we do consider it in
+#     # our energy balance)
+#     # m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
+#     m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
+    
+#     #########################################
+#     ############## Optimise #################
+#     #########################################
+#     m.optimize()
+#     if debug:
+#         print(f'status: {m.status} \nprofit {m.objective_value}')
+    
+#     if write:
+#         m.write(write)
+
+#     #########################################
+#     ############ Gather Results #############
+#     #########################################
+#     results = pd.DataFrame(index=rrp.index)
+#     res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
+#     res_dataDict = {}
+    
+#     for key,var in res_dict.items():
+#         myVar = [v.x for v in var]
+#         res_dataDict[key] = myVar
+        
+#     results = pd.DataFrame(res_dataDict,index=rrp.index) 
+
+#     results = pd.concat([rMax*results,rrp],axis=1)
+    
+#     # Splits the profit out by raise/lower Reg/Cont markets
+#     for col in rrp.columns:
+#         if col == 'RRP':
+#             varStr = 'dt_net_MW'
+#         elif 'LOWER' in col:
+#             if 'REG' in col:
+#                 varStr = 'Reg_Lt_MW'
+#             else:
+#                 varStr = 'Cont_Lt_MW'
+#         elif 'RAISE' in col:
+#             if 'REG' in col:
+#                 varStr = 'Reg_Rt_MW'
+#             else:
+#                 varStr = 'Cont_Rt_MW'
+
+#         results[rf'{col}_Profit_$'] = results[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
+    
+#     return results
+
+
+def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},write=False,debug=True,rrp_actual=None):
     """
-
-    # Define the key constraining constants based on rmax
-    maxAvail = 2                                      # Effective RReg FCAS MaxAvail
-    enablementMax = 1                                   # Enablement Max. Assume same for all FCAS
-    enablementMin = -1                                  # Enablement Min. Assume same for all FCAS
-    lowBreakpoint = 1                                   # Low breakpoint
-    highBreakpoint = -1                                 # High breakpoint
-    lowerSlope = (lowBreakpoint - enablementMin)/maxAvail  # Upper/Lower Slope Coeff
-    upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
-
-    # make rrp a list so can use in optimiser
-    enRRP = list(rrp['RRP']) # Energy rrp
-    regRaiseRRP = list(rrp['RAISEREGRRP'])
-    regLowerRRP = list(rrp['LOWERREGRRP'])
-    contRaiseRRP = list(rrp[['RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP']].sum(axis=1)) # Sum of the contingency raise market
-    contLowerRRP = list(rrp[['LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']].sum(axis=1)) # Sum of the contingency lower market
-    
-    hr_frac = freq/60 # convert freq to fraction of hours
-    
-    n = len(rrp) # Get the length of the optimisation
-    
-    #########################################
-    ############# Add variables #############
-    #########################################
-
-    dt = [m.add_var(name=f'dt_{i}',lb=-1,ub=1) for i in range(n)] # discharging rate at time, t. Ratio of max charge rate (MW)
-
-    regDt = [m.add_var(name=f'regDt_{i}',lb=-1,ub=1) for i in range(n)] # Dispatched FCAS reg discharge rate, t. Ratio of max charge rate (MW)
-
-    st = [m.add_var(name=f'st_{i}',lb=0,ub=sMax) for i in range(n)] # storage level at time, t. Hours
-    
-    Reg_Rt = [m.add_var(name=f'Reg_Rt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Regulation FCAS raise at time, t.
-    Reg_Lt = [m.add_var(name=f'Reg_Lt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Regulation FCAS lower at time, t.
-
-    Cont_Rt = [m.add_var(name=f'Cont_Rt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Contingency FCAS raise at time, t.
-    Cont_Lt = [m.add_var(name=f'Cont_Lt_{i}',lb=0,ub=maxAvail) for i in range(n)] # this is the MW that are available for Contingency FCAS lower at time, t.
-
-
-    
-    #########################################
-    ############ Add constraints ############
-    #########################################
-    for i in range(1,n):
-        # Force dispatch commands to 0 if their market is not represented to avoid perverse storage behaviour
-        if sum(enRRP) == 0:
-            m += dt[i] == 0, f'energy_market_{i}'
-
-        if sum(regRaiseRRP) == 0:
-            m += Reg_Rt[i] == 0, f'RegRaise_market_{i}'
-
-        if sum(regLowerRRP) == 0:
-            m += Reg_Lt[i] == 0, f'RegLower_market_{i}'
-
-        if sum(contRaiseRRP) == 0:
-            m += Cont_Rt[i] == 0, f'ContRaise_market_{i}'
-
-        if sum(contLowerRRP) == 0:
-            m += Cont_Lt[i] == 0, f'ContLower_market_{i}'
-
-        # Fraction of FCAS reg raise/lower that is dispatched. Calculate as a ratio between what is charged and discharged such that regDisFrac*Raise is dispatched if all raise,
-        # regDisFrac*Lower if all lower, and 0 if Raise = Lower. Linear interp in between
-        m += regDt[i] == regDisFrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{i}'
-
-        # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
-        # such a constraint.
-        # Instead, embed the round trip efficiency into the storage cap. Essentially storage level represents the 'available' energy to be exported
-
-        # m += st[i] - st[i-1] + eta*(hr_frac*(dt[i] + regDt[i])) == 0, f'storage_level_{i}' # Assume enabled FCAS contingency never gets dispatched, but that reg does, effectively regDisFrac% of the time
-        m += st[i] - st[i-1] + eta*hr_frac*(dt[i] + regDt[i]) == 0, f'storage_level_{i}' # The optimiser abuses the power of having a deterministic regDt. Accordingly, ensure regDisFrac is set small.
-
-        # Apply FCAS reg raise constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
-        # # m += Reg_Rt[i] <= maxAvail, f"RegRaise_cap_{i}"                                             # Effective RReg FCAS MaxAvail
-        m += Reg_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_RegRaise_cap_{i}"             # (Effective RReg EnablementMax - Energy Target) / Upper Slope Coeff RReg
-        # # m += Reg_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegRaise_cap_{i}"             # (Energy Target - Effective RReg EnablementMin) / Lower Slope Coeff RReg. (Lower slope is undefined for raise)
-        m += Reg_Rt[i] <= (enablementMax - dt[i] - upperSlope*Cont_Rt[i]), f"RegRaise_jointCap_{i}" # Offer Cont. Raise EnablementMax - Energy Target - (Upper Slope Coeff Cont. Raise x Cont. Raise Target)
-        # # m += Reg_Rt[i] >= 0, f"RegRaise_floor_{i}"                                                  # if < 0, then it's reg lower, not raise
-        # m += st[i] - ((Reg_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"RegRaise_storeCap_{i}"                         # Must always have enough storage to be dispatched for the entire period
-
-        # Apply FCAS reg lower constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
-        # # m += Reg_Lt[i] <= maxAvail, f"RegLower_cap_{i}"                                              # Effective LReg FCAS MaxAvail
-        # # m += Reg_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_RegLower_cap_{i}"              # (Effective LReg EnablementMax - Energy Target) / Upper Slope Coeff LReg. (Upper slope is undefined for lower)
-        m += Reg_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegLower_cap_{i}"             # (Energy Target - Effective LReg EnablementMin) / Lower Slope Coeff LReg
-        m += Reg_Lt[i] <= (-enablementMin + dt[i] - lowerSlope*Cont_Lt[i]), f"RegLower_jointCap_{i}"  # Offer Cont. Lower EnablementMax - Energy Target - (Lower Slope Coeff Cont. Raise x Cont. Lower Target)
-        # # m += Reg_Lt[i] >= 0, f"RegLower_floor_{i}"                                                   # if < 0, then it's reg raise, not lower
-        # m += st[i] + (Reg_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"RegLower_storeCap_{i}"                       # Must always have enough storage to be dispatched for the entire period
-
-        # Apply FCAS contingecy raise constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
-        # # m += Cont_Rt[i] <= maxAvail, f"ContRaise_cap_{i}"                                   # Effective RCont FCAS MaxAvail
-        m += Cont_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_ContRaise_cap_{i}"   # (Offer Rxx EnablementMax - Energy Target) / Upper Slope Coeff Rxx
-        # # m += Cont_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContRaise_cap_{i}"   # (Energy Target - Offer Rxx EnablementMin) / Lower Slope Coeff Rxx. (Lower slope is undefined for raise)
-        # # m += Cont_Rt[i] <= (enablementMax - dt[i] - Reg_Rt[i])/upperSlope                 # (Offer Rxx EnablementMax - Energy Target - RReg Target) / Upper Slope Coeff Rxx # replicated above
-        # # m += Cont_Rt[i] >= 0, f"ContRaise_floor_{i}"                                        # if < 0, then it's cont lower, not raise
-        # m += st[i] - ((Cont_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"ContRaise_storeCap_{i}"               # Must always have enough storage to be dispatched for the entire period
-
-        # Apply FCAS contingecy lower constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
-        # # m += Cont_Lt[i] <= maxAvail, f"ContLower_cap_{i}"                                   # Effective LCont FCAS MaxAvail
-        # # m += Cont_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_ContLower_cap_{i}"   # (Offer Lxx EnablementMax - Energy Target) / Upper Slope Coeff Lxx. (Upper slope is undefined for
-        #  lower)
-        m += Cont_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContLower_cap_{i}"  # (Energy Target - Offer Lxx EnablementMin) / Lower Slope Coeff Lxx
-        # # m += Cont_Lt[i] <= (enablementMax + dt[i] - Reg_Lt[i])/lowerSlope                 # (Offer Lxx EnablementMax - Energy Target - LReg Target) / Lower Slope Coeff Lxx # replicated above
-        # # m += Cont_Lt[i] >= 0, f"ContLower_floor_{i}"                                        # if < 0, then it's cont raise, not lower
-        # m += st[i] + (Cont_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"ContLower_storeCap_{i}"            # Must always have enough storage to be dispatched for the entire period
-        
-
-        # Joint storage capacity constraint (energy, reg, and cont).
-        m += st[i] >= (hr_frac/eta)*((Reg_Rt[i] + dt[i]) + 2*(Cont_Rt[i])), f"Raise_jointStorageCap_{i}" # assume that energy, reg, and contingency raise are all dispatched at one. Cont can last up to 10mins, not 5
-        m += sMax >= st[i] + eta*hr_frac*((Reg_Lt[i] - dt[i]) + 2*Cont_Lt[i]), f"Lower_jointStorageCap_{i}" # same as above, reverse signs for reg an cont, but keep same sign for dt
-
-
-
-    m += st[0] == st0, 'initial_condition'
-    
-    #########################################
-    ############## Objective ################
-    #########################################
-    # This first, commented-out constraint includes the revenue from FCAS Reg, which are never guaranteed. So we should definitely not optimise for it (even though we do consider it in
-    # our energy balance)
-    # m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
-    m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
-    
-    #########################################
-    ############## Optimise #################
-    #########################################
-    m.optimize()
-    if debug:
-        print(f'status: {m.status} \nprofit {m.objective_value}')
-    
-    if write:
-        m.write(write)
-
-    #########################################
-    ############ Gather Results #############
-    #########################################
-    results = pd.DataFrame(index=rrp.index)
-    res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
-    res_dataDict = {}
-    
-    for key,var in res_dict.items():
-        myVar = [v.x for v in var]
-        res_dataDict[key] = myVar
-        
-    results = pd.DataFrame(res_dataDict,index=rrp.index) 
-
-    results = pd.concat([rMax*results,rrp],axis=1)
-    
-    # Splits the profit out by raise/lower Reg/Cont markets
-    for col in rrp.columns:
-        if col == 'RRP':
-            varStr = 'dt_net_MW'
-        elif 'LOWER' in col:
-            if 'REG' in col:
-                varStr = 'Reg_Lt_MW'
-            else:
-                varStr = 'Cont_Lt_MW'
-        elif 'RAISE' in col:
-            if 'REG' in col:
-                varStr = 'Reg_Rt_MW'
-            else:
-                varStr = 'Cont_Rt_MW'
-
-        results[rf'{col}_Profit_$'] = results[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
-    
-    return results
-
-
-def BESS_COINOP3(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},write=False,debug=True,rrp_actual=None):
-    """
-    Uses the mip COIN-OP linear solver to perform a linear optimisation of a battery energy storage system (BESS)
+    Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
     dispatch strategy, based on the energy and FCAS price curves, BESS energy storage capacity, and efficiency. 
     Version 3 allows a weighted average of FCAS regulation dispatch fractions to factor into the calculation.
     
@@ -597,91 +626,91 @@ def BESS_COINOP3(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDic
     return results
 
 
-def horizonDispatch(RRP,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,debug=True):
-    """
-    A wrapper around BESS_COINOP that runs a moving forecast window of width tFcst in hours at intervals
-    of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
+# def horizonDispatch(RRP,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,debug=True):
+#     """
+#     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
+#     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
     
-    Args:
-        RRP (pandas Series): Index must be DatetimeIndex. Should correspond to a static price forecast in $/MWh.
+#     Args:
+#         RRP (pandas Series): Index must be DatetimeIndex. Should correspond to a static price forecast in $/MWh.
         
-        freq (int): Frequency of RRP in minutes.
+#         freq (int): Frequency of RRP in minutes.
         
-        tFcst (int): Length of the slice of the price forecast you want to pass to the optimiser in HOURS.
+#         tFcst (int): Length of the slice of the price forecast you want to pass to the optimiser in HOURS.
         
-        tInt (int): Length of the interval over which you want to implement the optimised operations before seeing
-            the next section of the forecast in MINUTES.
+#         tInt (int): Length of the interval over which you want to implement the optimised operations before seeing
+#             the next section of the forecast in MINUTES.
             
-        sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
+#         sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
         
-        st0 (float. Default=2): Starting capacity of your BESS in hours.
+#         st0 (float. Default=2): Starting capacity of your BESS in hours.
         
-        eta (float. Default=0.8): Round-trip efficiency of your BESS.
+#         eta (float. Default=0.8): Round-trip efficiency of your BESS.
         
-        rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
-            This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+#         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
+#             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
             
-        debug (bool. Default=True): If True, prints out messages from BESS_COINOP that are useful for debugging. 
+#         debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
         
-    Functions used:
-        analysis_functions:
-            - BESS_COINOP()
+#     Functions used:
+#         analysis_functions:
+#             - BESS_COINOR()
     
-    Returns:
-        results (pandas DataFrame): Columns are as for BESS_COINOP, but with "DailyProfit_$" added as a column. Results
-            are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
-            forecast horizon but which did not come to fruition.
+#     Returns:
+#         results (pandas DataFrame): Columns are as for BESS_COINOR, but with "DailyProfit_$" added as a column. Results
+#             are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
+#             forecast horizon but which did not come to fruition.
     
-    Use this function to experiment with different BESS sizes/specs and forecast horizons and intervals. Works best with a predefined
-    forecast, rather than one that changes every interval. Future implementations could allow a dictionary of forecasts to be passed,
-    and looked up for a given time-stamp.
+#     Use this function to experiment with different BESS sizes/specs and forecast horizons and intervals. Works best with a predefined
+#     forecast, rather than one that changes every interval. Future implementations could allow a dictionary of forecasts to be passed,
+#     and looked up for a given time-stamp.
     
-    Created on 16/04/2020 by Bennett Schneider
+#     Created on 16/04/2020 by Bennett Schneider
     
-    """
-    RESULTS = []
-    numInts = 60/freq # number of intervals in an hour
-    # for i in range(0,int(days*24*60/tInt)):
-    for i in range(0,int(freq*(len(RRP))/tInt)):
+#     """
+#     RESULTS = []
+#     numInts = 60/freq # number of intervals in an hour
+#     # for i in range(0,int(days*24*60/tInt)):
+#     for i in range(0,int(freq*(len(RRP))/tInt)):
               
-        start = int(numInts*i*tInt/60) # define start of the interval
-        end = int(numInts*(i*tInt/60+tFcst)) # define end of the interval
+#         start = int(numInts*i*tInt/60) # define start of the interval
+#         end = int(numInts*(i*tInt/60+tFcst)) # define end of the interval
         
-        if i > 0:
-            start -= 1 # go back one time-step so we get an overlap of the initial conditions
+#         if i > 0:
+#             start -= 1 # go back one time-step so we get an overlap of the initial conditions
         
-        rrp_series = RRP.iloc[start:end]
+#         rrp_series = RRP.iloc[start:end]
 
-        if debug:
-            print(f"Running BESS COIN OP between {rrp_series.index[0]} and {rrp_series.index[-1]}")
+#         if debug:
+#             print(f"Running BESS COIN OR between {rrp_series.index[0]} and {rrp_series.index[-1]}")
         
-        results = BESS_COINOP(rrp_series,freq=freq,sMax=sMax,st0=st0,eta=eta,write=False,debug=True)
+#         results = BESS_COINOR(rrp_series,freq=freq,sMax=sMax,st0=st0,eta=eta,write=False,debug=True)
 
-        results = results[:int(numInts*tInt/60)] # restrict results to those of a single dispatch interval (not the forecast length)
+#         results = results[:int(numInts*tInt/60)] # restrict results to those of a single dispatch interval (not the forecast length)
         
-        if i > 0 :
-            results = results[1:] # remove the first element because it's a duplicate
+#         if i > 0 :
+#             results = results[1:] # remove the first element because it's a duplicate
         
-        st0 = results['st_MWh'].iloc[-1] # the last state of charge is now the initial condition for the next interval
+#         st0 = results['st_MWh'].iloc[-1] # the last state of charge is now the initial condition for the next interval
         
-        RESULTS.append(results)
+#         RESULTS.append(results)
     
-    results = pd.concat(RESULTS)
+#     results = pd.concat(RESULTS)
     
-    # add a column for daily profit
-    td = pd.Timedelta(minutes=freq)
-    profit = results['Profit_$'].copy()
-    profit.index = profit.index - td
-    profit = profit.resample('d',loffset=td).sum() 
-    profit = profit.reindex(results.index,method='ffill')
-    results['DailyProfit_$'] = profit
+#     # add a column for daily profit
+#     td = pd.Timedelta(minutes=freq)
+#     profit = results['Profit_$'].copy()
+#     profit.index = profit.index - td
+#     profit = profit.resample('d',loffset=td).sum() 
+#     profit = profit.reindex(results.index,method='ffill')
+#     results['DailyProfit_$'] = profit
     
-    return results
+#     return results
 
 
-def horizonDispatch2(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_actual=None):
+def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_actual=None):
     """
-    A wrapper around BESS_COINOP2 that runs a moving forecast window of width tFcst in hours at intervals
+    A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
     
     Args:
@@ -708,16 +737,16 @@ def horizonDispatch2(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFra
 
         regDisFrac (float. Default=0.2): Fraction of enabled FCAS reg that is assumed to be dispatched. More research needed on this value.
             
-        debug (bool. Default=True): If True, prints out messages from BESS_COINOP that are useful for debugging. 
+        debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
 
         rrp_actual (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating actual revenue, but uses rrp in the optimisation.
         
     Functions used:
         analysis_functions:
-            - BESS_COINOP()
+            - BESS_COINOR()
     
     Returns:
-        results (pandas DataFrame): Columns are as for BESS_COINOP, but with "DailyProfit_$" added as a column. Results
+        results (pandas DataFrame): Columns are as for BESS_COINOR, but with "DailyProfit_$" added as a column. Results
             are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
             forecast horizon but which did not come to fruition.
     
@@ -747,10 +776,10 @@ def horizonDispatch2(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFra
             rrp_frame_actual = None
 
         if debug:
-            print(f"Running BESS COIN OP between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
+            print(f"Running BESS COIN OR between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
 
         # write = rf"C:\Users\bennett.schneider\OneDrive - Australian National University\Master of Energy Change\SCNC8021\Analysis\FCAS\debug\{rrp_series.index[0].strftime('%Y%m%d')}.lp"
-        results = BESS_COINOP3(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_actual=rrp_frame_actual)
+        results = BESS_COINOR(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_actual=rrp_frame_actual)
         # print(results)
         # breakpoint()
 
