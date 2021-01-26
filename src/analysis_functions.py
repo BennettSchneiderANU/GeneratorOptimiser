@@ -1137,7 +1137,8 @@ def dictFilt(df,selectDict):
     
     return df_filt
 
-def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
+# def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
+def thresh_smooth(rdata,freq,window,thresh,roll=False):
     """
     Implements a smoothing function that sets the value of data to the average value across a rolling 
     window if the differential across that rolling window is < thresh.
@@ -1145,7 +1146,8 @@ def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
     RRP_6t' = {(1/h) ∑_t^(t+h)_t RRP_6t, |max⁡(RRP_6t)-min(RRP_6t)| < P
             RRP_6t,t∈h,|max⁡(RRP_6t)-min(RRP_6t)| >= P
     Args:
-        rdata (pandas Series or pandas DataFrame): Any pandas Series
+        # rdata (pandas Series or pandas DataFrame): Any pandas Series
+        rdata (pandas Series): Any pandas Series
         
         freq (int): Frequency of the data in mins
         
@@ -1163,8 +1165,8 @@ def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
     
     """
     rdata = rdata.copy()
-    rdata.name = col
-    rname = col
+    # rdata.name = col
+    # rname = col
     
     try:
         rdata = rdata.to_frame()
@@ -1174,18 +1176,21 @@ def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
     rdata.index = rdata.index - pd.Timedelta(minutes=freq)
     
     if roll:
-        rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=True))
+        # rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=True))
+        rdata = rdata.rolling(window).apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=True),raw=True)
     else:
         rdata['group'] = [i//window for i in range(len(rdata))] # set up a grouping set
         # breakpoint()
-        rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=False))
-    rdata = rdata[[rname]]
+        # rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=False))
+        rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=False),raw=True)
+    # rdata = rdata[[rname]]
     rdata.index = rdata.index + pd.Timedelta(minutes=freq)
     
     return rdata
     
     
-def thresh_flat(dataSlice,thresh,rname,roll):
+# def thresh_flat(dataSlice,thresh,rname,roll):
+def thresh_flat(dataSlice,thresh,roll):
     """
     The lambda function for thresh_smooth.
     """
@@ -1194,7 +1199,8 @@ def thresh_flat(dataSlice,thresh,rname,roll):
     if roll:
         dRange = abs(dataSlice.max() - dataSlice.min())
     else:
-        dRange = abs(dataSlice[rname].max() - dataSlice[rname].min())
+        # dRange = abs(dataSlice[rname].max() - dataSlice[rname].min())
+        dRange = abs(dataSlice.max() - dataSlice.min())
     # print(dRange)
     # print(dataSlice.mean())
     if roll:
@@ -1204,6 +1210,7 @@ def thresh_flat(dataSlice,thresh,rname,roll):
             dataSlice = dataSlice[-1]
     else:
         if dRange < thresh:
-            dataSlice[rname].loc[:] = dataSlice[rname].mean()
+            # dataSlice[rname].loc[:] = dataSlice[rname].mean()
+            dataSlice.loc[:] = dataSlice.mean()
     # print(dataSlice)
     return dataSlice

@@ -5,12 +5,13 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import pickle as pkl
+from mip import *
 
 from analysis_functions import *
 from error_handling import *
 
 class Gen(object):
-    def __init__(self,path,t0,t1,region,Di=0.25,Fh=0.25,Fr=0.2,scenario='RRP'):
+    def __init__(self,path,t0,t1,region,Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP'):
         """
         Initialises a Gen object.
 
@@ -23,15 +24,21 @@ class Gen(object):
 
             region (str): Name of the pricing region of the network you want to model.
 
-            Di (float or int): The dispatch interval. If < 1, this is interpreted as a fraction of the total number of timestamps. 
-                Otherwise, it is interpreted as the number of minutes in the dispatch interval.
+            Di (float, int, or str. Default='/4'): The dispatch interval. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of 
+                timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval.
 
-            Fh (float or int): The forecast horizon. If < 1, this is interpreted as a fraction of the total number of timestamps. 
-                Otherwise, it is interpreted as the number of minutes in the dispatch interval.
+            Fh (float or int. Default='/4'): The forecast horizon. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of 
+                timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval.
 
-            Fr (float): The regulation dispatch fraction. Must be < 1. 
+            Fr (float. Default=0.2): The regulation dispatch fraction applied to the optimised dispatch. Must be < 1. 
 
-            scenario (str): Choose a scenario from the list of scenarios embedded in this function. Must match one of the keys which 
+            Fr_w (dict of floats. Default=None): Values are Fr applied to the optimiser when deciding dispatch. Keys are the weights the optimiser 
+                asssigns to the respective Fr. If None, equal to {1:Fr}, i.e. the optimiser receives the same setting as is applied to the optimised
+                dispatch, with unity weighting.
+
+            freq (float. Default=30): Frequency of the expected input in minutes.
+
+            scenario (str. Default='RRP'): Choose a scenario from the list of scenarios embedded in this function. Must match one of the keys which 
                 corresponds to a set of markets across which the object will be optimised.
 
         Adds to self as attribute:
@@ -63,6 +70,14 @@ class Gen(object):
         self.Di = Di
         self.Fh = Fh
         self.Fr = Fr
+
+        # If no weighting set, just apply full weighting on Fr
+        if Fr_w:
+            self.Fr_w = Fr_w
+        else:
+            self.Fr_w = {1:Fr}
+
+        self.freq = freq
         self.scenario = scenario
         self.markets = scenarios[scenario]
 
@@ -153,16 +168,57 @@ class Gen(object):
             name += f"_{comment}"
 
         return name
-        
+    
+    def thresh_smooth(self,data,window,thresh,roll=False):
+        """
 
-     
+        """
+        data = data.copy()
+        
+        for col in data.columns:
+            data[col] = thresh_smooth(data[col],self.freq,window,thresh,roll=roll)
+
+        data['modFunc'] = 'thresh_smooth'
+
+        return data
+
+    def constructRRP(self,RRP,freq_in,modFunc,**kwargs):
+        """
+        """
+        RRP = RRP.copy()
+
+        # Filter by region
+        RRP = RRP[RRP['REGIONID'] == self.region]
+
+        # Zero by RRP
+        for col in RRP.columns:
+            if col not in self.markets:
+                RRP[col] = 0
+
+        # Filter by time
+        RRP = RRP.loc[(RRP.index >= self.t0) & (RRP.index <= self.t1)]
+
+        # Average to self.freq
+        RRP = timeAvgEnd(RRP[[col for col in RRP if col != 'REGIONID']],freq_in,self.freq)
+
+        RRP_mod = modFunc(RRP,**kwargs)
+
+        RRP['modFunc'] = 'Orig'
+
+        RRP = pd.concat([RRP,RRP_mod])
+
+        RRP['REGIONID'] = self.region
+        
+        # rrp = rrp.apply(lambda series: modFunc(series,**kwargs))
+
+        return RRP
 
 class BESS(Gen):
-    def __init__(self,path,t0,t1,region,Di=5,Fh=0.25,Fr=0.2,scenario='RRP',Smax=2):
+    def __init__(self,path,t0,t1,region,Di=5,Fh=0.25,Fr=0.2,freq=30,scenario='RRP',Smax=2):
         """
 
         """
-        super(BESS,self).__init__(path,t0,t1,region,Di=5,Fh=0.25,Fr=0.2,scenario='RRP')
+        super(BESS,self).__init__(path,t0,t1,region,Di=Di,Fh=Fh,Fr=Fr,scenario=scenario)
         self.Smax = Smax
         self.settings.update(
             {
@@ -170,3 +226,28 @@ class BESS(Gen):
             }
         )
 
+    def optDispatch(self,RRP,m,freq_in=5,debug=False):
+        """
+        
+        """
+       
+
+        # Get the dispatch interval
+        if type(self.Di) == str: # if a string, should be of the form '/num'
+            Di = len(rrp)/float(self.Di.replace('/','')) # interpret as fraction of total number of intervals
+        else:
+            Di = self.Di # otherwise, interpret as number of minutes
+        
+        # Get the forecast horizon
+        if type(self.Fh) == str: # if a string, should be of the form '/num'
+            Fh = len(rrp)/float(self.Fh.replace('/','')) # interpret as fraction of total number of intervals
+        else:
+            Fh = self.Fh # otherwise, interpret as number of hours
+
+
+        horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_actual=None)
+
+        # Return the RRP signal passed through the optimiser as well as the one that is evaluated. Return as a stacked dataframe where
+        # the original is flagged with the word 'Orig' and the one from the optimiser is flagged according to the algorithm used.
+
+        return results,RRPout
