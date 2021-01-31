@@ -9,9 +9,7 @@ import pandas as pd
 import numpy as np
 from scipy import stats,optimize
 import datetime as dt
-import plotly.graph_objects as go
-from plotly.subplots import make_subplots
-from plotly.offline import plot
+from plotting_functions import *
 import os
 import time
 from mip import *
@@ -382,7 +380,7 @@ def timeAvgEnd(data,in_freq,out_freq):
 #     return results
 
 
-def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},write=False,debug=True,rrp_actual=None):
+def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},write=False,debug=True,rrp_mod=None):
     """
     Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
     dispatch strategy, based on the energy and FCAS price curves, BESS energy storage capacity, and efficiency. 
@@ -415,7 +413,8 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
             
         debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
 
-        rrp_actual (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating actual revenue, but uses rrp in the optimisation.
+        rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for running the optimisation instead of rrp, but use rrp
+            to evaluate the revenue.
     
     Returns:
         results (pandas DataFrame): Index matches that of rrp. Columns are:
@@ -440,16 +439,22 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     lowerSlope = (lowBreakpoint - enablementMin)/maxAvail  # Upper/Lower Slope Coeff
     upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
 
+
+    if type(rrp_mod) == pd.core.frame.DataFrame:
+        optRRP = rrp_mod.copy()
+    else:
+        optRRP = rrp.copy()
+
     # make rrp a list so can use in optimiser
-    enRRP = list(rrp['RRP']) # Energy rrp
-    regRaiseRRP = list(rrp['RAISEREGRRP'])
-    regLowerRRP = list(rrp['LOWERREGRRP'])
-    contRaiseRRP = list(rrp[['RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP']].sum(axis=1)) # Sum of the contingency raise market
-    contLowerRRP = list(rrp[['LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']].sum(axis=1)) # Sum of the contingency lower market
+    enRRP = list(optRRP['RRP']) # Energy rrp
+    regRaiseRRP = list(optRRP['RAISEREGRRP'])
+    regLowerRRP = list(optRRP['LOWERREGRRP'])
+    contRaiseRRP = list(optRRP[['RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP']].sum(axis=1)) # Sum of the contingency raise market
+    contLowerRRP = list(optRRP[['LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']].sum(axis=1)) # Sum of the contingency lower market
     
     hr_frac = freq/60 # convert freq to fraction of hours
     
-    n = len(rrp) # Get the length of the optimisation
+    n = len(optRRP) # Get the length of the optimisation
     
     #########################################
     ############# Add variables #############
@@ -500,7 +505,7 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
 
         for rdfrac,prob in regDict.items():
             # breakpoint()
-            m += regDtDist[rdfrac][i] == rdfrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{key}_{i}' # regulation dispatch under different regulation dispatch fraction scenarios
+            m += regDtDist[rdfrac][i] == rdfrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{rdfrac}_{i}' # regulation dispatch under different regulation dispatch fraction scenarios
 
         # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
         # such a constraint.
@@ -586,24 +591,25 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     
     if write:
         m.write(write)
-
+    breakpoint()
     #########################################
     ############ Gather Results #############
     #########################################
 
-    if type(rrp_actual) == pd.core.frame.DataFrame:
-        rrp = rrp_actual.copy()
-    else:
-        rrp = rrp.copy()
+    # if type(rrp_mod) == pd.core.frame.DataFrame:
+    #     rrp = rrp_mod.copy()
+    # else:
+    #     rrp = rrp.copy()
+
     results = pd.DataFrame(index=rrp.index)
     res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
     res_dataDict = {}
     for key,var in res_dict.items():
         myVar = [v.x for v in var]
         res_dataDict[key] = myVar
-        
+    
     results = pd.DataFrame(res_dataDict,index=rrp.index) 
-
+    breakpoint()
     results = pd.concat([rMax*results,rrp],axis=1)
     
     # Splits the profit out by raise/lower Reg/Cont markets
@@ -621,8 +627,11 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
             else:
                 varStr = 'Cont_Rt_MW'
 
-        results[rf'{col}_Profit_$'] = results[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
-    
+        try:
+            results[rf'{col}_Profit_$'] = results[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
+        except TypeError:
+            pass
+    breakpoint()
     return results
 
 
@@ -708,7 +717,7 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
 #     return results
 
 
-def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_actual=None):
+def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_mod=None):
     """
     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
@@ -739,7 +748,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
             
         debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
 
-        rrp_actual (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating actual revenue, but uses rrp in the optimisation.
+        rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating the optimisation, but uses rrp for evaluating actual revenue.
         
     Functions used:
         analysis_functions:
@@ -770,16 +779,16 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
             start -= 1 # go back one time-step so we get an overlap of the initial conditions
         
         rrp_frame = RRP.iloc[start:end]
-        if type(rrp_actual) == pd.core.frame.DataFrame:
-            rrp_frame_actual = rrp_actual.iloc[start:end]
+        if type(rrp_mod) == pd.core.frame.DataFrame:
+            rrp_frame_mod = rrp_mod.iloc[start:end]
         else:
-            rrp_frame_actual = None
+            rrp_frame_mod = None
 
         if debug:
             print(f"Running BESS COIN OR between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
 
         # write = rf"C:\Users\bennett.schneider\OneDrive - Australian National University\Master of Energy Change\SCNC8021\Analysis\FCAS\debug\{rrp_series.index[0].strftime('%Y%m%d')}.lp"
-        results = BESS_COINOR(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_actual=rrp_frame_actual)
+        results = BESS_COINOR(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_mod=rrp_frame_mod)
         # print(results)
         # breakpoint()
 
@@ -1197,7 +1206,7 @@ def thresh_smooth(data,freq,window,thresh,roll=False):
     # shift the index
     data.index = rdata.index + pd.Timedelta(minutes=freq)
     
-    # add a new column to identify the new data based on the name of the function
+    # add a new column to identify the new data based on the name of the functionhgo
     data['modFunc'] = thresh_smooth.__name__
 
     return data

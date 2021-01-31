@@ -3,6 +3,7 @@ from plotly.subplots import make_subplots
 from plotly.offline import plot
 import plotly.express as px
 import plotly.colors
+import numpy as np
 import os
 
 def plotlyPivot(
