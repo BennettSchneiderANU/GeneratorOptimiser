@@ -41,10 +41,40 @@ class NEM(Network):
         super(NEM,self).__init__(path)
         self.regionStr='REGIONID'
 
-    def procPrice(self,freq,region,t0,t1,modFunc=None,**kwargs):
+    def procPrice(self,freq,region,t0,t1,pivot=False,modFunc=None,**kwargs):
         """
         Process pricing data. Takes in rawData from NEM.rawData['Price'], averages to a given frequency, modifies with modFunc,
         converts to stacked schema, and dumps it into self.procData['Price'].
+
+        Args:
+            freq (int): Frequency of the output data in minutes.
+
+            region (str): Filter on self.rawData['Price']['REGIONID']
+
+            t0 (datetime): The start of the desired slice of the raw data.
+
+            t1 (datetime): THe end of the desired slice of the raw data.
+
+            pivot (boo. Default=False): If True, outputs the pivoted price according to the given market to which it applies. If false, outputs as a stacked
+                table consisting of 'Market' and 'RRP' columns. This modification DOES NOT apply to the version of the data which is stored in the caller under self.procData['Price'],
+                which is always fully stacked.
+
+            modFunc (function): Function used to modify the raw data. Flagged as modified according to the function name in addition to the function inputs
+
+            **kwargs (dict of inputs): Inputs for modFunc. Freq is often also an input for modFunc, but it needn't be included here, as it is included based on the freq input to NEM.procPrice()
+
+        Retuns:
+            RRP (pandas DataFrame): self.rawData['Price'] averaged to freq, filtered by region and t0/t1. If modFunc is defined, also outputs the same output as modified by modFunc, stacked in the
+                dataframe and flagged by the name of modFunc and by its kwargs. If pivot = True, RRP is split out by market in the columns. Otherwise, output as fully stacked dataframe under two 
+                separate columns, RRP and Market.
+        
+        Adds to self as attribute:
+            self.procData['Price'] (pandas DataFrame): Adds RRP in fully stacked form to the already existing self.procData['Price']. All duplicates are removed.
+
+        Use this function to generate processed RRP data from the raw record.
+
+        Created on 14/02/2021 by Bennett Schneider 
+
         """
         try:
             RRP = self.rawData['Price'].copy()
@@ -77,7 +107,7 @@ class NEM(Network):
             # further mark RRP_mod by the kwargs inputs
             for key,val in kwargs.items():
                 RRP_mod[key] = val
-        
+
         # mark RRP as the original
         RRP['modFunc'] = 'Orig'
         
@@ -90,7 +120,7 @@ class NEM(Network):
         # RRP['scenario'] = scenario
 
         RRP['freq'] = freq
-        breakpoint()
+
         # stack
         name = RRP.index.name
         RRP = RRP.reset_index()
@@ -109,6 +139,11 @@ class NEM(Network):
 
         # add to self
         self.procData['Price'] = newData
+
+        # Unstack the output (stacked output only for self.procData)
+        if pivot:
+            RRP.reset_index(inplace=True)
+            RRP = pd.pivot_table(RRP.fillna(999),values='RRP',index=[col for col in RRP if col not in ['Market','RRP']],columns='Market').reset_index().set_index('Timestamp').rename_axis(None,axis=1)
 
         return RRP
 
@@ -155,14 +190,14 @@ class Gen(object):
 
         """
         scenarios = {
-            'RRP': ['RRP'],
-            'FCASCoopt': ['RRP','RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP','RAISEREGRRP','LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP','LOWERREGRRP'],
-            'RegCoopt': ['RRP','RAISEREGRRP','LOWERREGRRP'],
-            'RegRaiseCoopt': ['RRP','RAISEREGRRP'],
-            'RegLowerCoopt': ['RRP','LOWERREGRRP'],
-            'ContCoopt': ['RRP','RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP','LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP'],
-            'ContRaiseCoopt': ['RRP','RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP'],
-            'ContLowerCoopt': ['RRP','LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']
+            'Energy': ['Energy'],
+            'FCASCoopt': ['Energy','RAISE6SEC','RAISE60SEC','RAISE5MIN','RAISEREG','LOWER6SEC','LOWER60SEC','LOWER5MIN','LOWERREG'],
+            'RegCoopt': ['Energy','RAISEREG','LOWERREG'],
+            'RegRaiseCoopt': ['Energy','RAISEREG'],
+            'RegLowerCoopt': ['Energy','LOWERREG'],
+            'ContCoopt': ['Energy','RAISE6SEC','RAISE60SEC','RAISE5MIN','LOWER6SEC','LOWER60SEC','LOWER5MIN'],
+            'ContRaiseCoopt': ['Energy','RAISE6SEC','RAISE60SEC','RAISE5MIN'],
+            'ContLowerCoopt': ['Energy','LOWER6SEC','LOWER60SEC','LOWER5MIN']
             }
 
         self.path = path
@@ -300,8 +335,13 @@ class Gen(object):
         Created on 31/01/2021 by Bennett Schneider
         """
 
+
         try:
             nPrice = Network.procData['Price'].copy()
+
+            # Pivot the stacked table for convenience going forward
+            nPrice.reset_index(inplace=True)
+            nPrice = pd.pivot_table(nPrice.fillna(999),values='RRP',index=[col for col in nPrice if col not in ['Market','RRP']],columns='Market').reset_index().set_index('Timestamp').rename_axis(None,axis=1)
 
             # logic required to slice out the correct data from the network price record
             logic = (nPrice[Network.regionStr] == self.region) & \
@@ -340,20 +380,31 @@ class Gen(object):
         except IndexError as e:
             if self.modFunc:
                 # Create our input data and store it in a network object
-                rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,**self.kwargs)
+                rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,pivot=True,**self.kwargs)
             else:
                 errFunc(e)
         except KeyError:
-            rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,**self.kwargs)
-            
+            rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,pivot=True,**self.kwargs)
+    
         # zero columns based on markets
-        for myRRP in [rrp,rrp_mod]:
+        my_rrp = [rrp,rrp_mod]
+        my_new_rrp = []
+        # List of markets listed in the processed data
+        market_list = list(Network.procData['Price']['Market'].unique())
+        for myRRP in my_rrp:
             if type(myRRP) == pd.core.frame.DataFrame:
-                myRRP.drop([col for col in myRRP if 'RRP' not in col],axis=1,inplace=True) # remove metadata
+                rrp_copy = myRRP.copy()
+                rrp_copy.drop([col for col in rrp_copy if col not in market_list],axis=1,inplace=True) # remove metadata
                 # Zero by RRP
-                for col in myRRP.columns:
+                for col in rrp_copy.columns:
                     if col not in self.markets:
-                        myRRP.loc[:,col] = 0
+                        rrp_copy.loc[:,col] = 0
+            else:
+                rrp_copy = myRRP
+                
+            my_new_rrp.append(rrp_copy) # append zeroed data to new rrp list
+                
+        rrp,rrp_mod = my_new_rrp # assign back to original dataframes
 
         return rrp,rrp_mod
 
