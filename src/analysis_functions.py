@@ -502,7 +502,7 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
         # Fraction of FCAS reg raise/lower that is dispatched. Calculate as a ratio between what is charged and discharged such that regDisFrac*Raise is dispatched if all raise,
         # regDisFrac*Lower if all lower, and 0 if Raise = Lower. Linear interp in between
         m += regDt[i] == regDisFrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{i}'
-
+        
         for rdfrac,prob in regDict.items():
             # breakpoint()
             m += regDtDist[rdfrac][i] == rdfrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{rdfrac}_{i}' # regulation dispatch under different regulation dispatch fraction scenarios
@@ -565,17 +565,10 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     # our energy balance)
     # m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
 
-    # regDtDist:
-      # keys -> regDisFrac scenarios (0 - 0.5)
-      # vals -> list of regDt values for each i
-    
-    # regDict:
-      # keys -> regDisFrac scenarios (0 - 0.5)
-      # vals -> probability
-
     # breakpoint()
+
     m.objective = xsum(
-        rMax*(
+            (
             sum(
                 [regDict[regDis]*(enRRP[i]*(dt[i] + regDis_i[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for regDis,regDis_i in regDtDist.items()]
                 )
@@ -591,7 +584,7 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     
     if write:
         m.write(write)
-    breakpoint()
+
     #########################################
     ############ Gather Results #############
     #########################################
@@ -602,36 +595,40 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     #     rrp = rrp.copy()
 
     results = pd.DataFrame(index=rrp.index)
-    res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
+    # res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
+    res_dict = {'Energy_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'REGRAISE_MW':Reg_Rt,'REGLOWER_MW':Reg_Lt,'CONTRAISE_MW':Cont_Rt,'CONTLOWER_MW':Cont_Lt}
     res_dataDict = {}
     for key,var in res_dict.items():
         myVar = [v.x for v in var]
         res_dataDict[key] = myVar
     
-    results = pd.DataFrame(res_dataDict,index=rrp.index) 
-    breakpoint()
-    results = pd.concat([rMax*results,rrp],axis=1)
+    results = pd.DataFrame(res_dataDict,index=rrp.index)*rMax
+    # results = pd.concat([rMax*results,rrp],axis=1)
     
     # Splits the profit out by raise/lower Reg/Cont markets
     for col in rrp.columns:
         if col == 'RRP':
-            varStr = 'dt_net_MW'
+            varStr = 'Energy_MW'
         elif 'LOWER' in col:
             if 'REG' in col:
-                varStr = 'Reg_Lt_MW'
+                varStr = 'REGLOWER_MW'
             else:
-                varStr = 'Cont_Lt_MW'
+                varStr = 'CONTLOWER_MW'
         elif 'RAISE' in col:
             if 'REG' in col:
-                varStr = 'Reg_Rt_MW'
+                varStr = 'REGRAISE_MW'
             else:
-                varStr = 'Cont_Rt_MW'
+                varStr = 'CONTRAISE_MW'
 
         try:
-            results[rf'{col}_Profit_$'] = results[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
+            if col == 'RRP':
+                col2 = 'Energy'
+            else:
+                col2 = col.replace('RRP','')
+            results[f"{col2}_$"] = rrp[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
         except TypeError:
             pass
-    breakpoint()
+
     return results
 
 
@@ -809,18 +806,51 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
         
         RESULTS.append(results)
     
+    # concatenate all the results together
     results = pd.concat(RESULTS)
+
+    # save the index name for later (should be 'Timestamp')
+    indexName = results.index.name
+
+    # Split results into two categories
+    opsCols = ['dt_MW','regDt_MW','st_MWh'] 
+    revCols = [col for col in results if col not in opsCols]
+    operations = results.copy()[opsCols]
+    revenue = results.copy()[revCols]
+
+    # stack the revenue table
+    # split into dispatch and revenue
+    dispatch = revenue[[col for col in revenue if 'MW' in col]]
+    revenue = revenue[[col for col in revenue if '$' in col]]
+
+    # remove the identifiers from the columns
+    dispatch.columns = [col.split('_')[0] for col in dispatch]
+    revenue.columns = [col.split('_')[0].replace('RRP','') for col in revenue]
+
+    # modify dispatch so we can map back 1:1 to the original markets
+    for rl in ['RAISE','LOWER']:
+        origCol = 'CONT' + rl
+        for market in ['6SEC','60SEC','5MIN']:
+            col = rl + market
+            dispatch[col] = dispatch[origCol] # we dispatch the same in all lower and raise markets
+        dispatch.drop(origCol,axis=1,inplace=True) # drop the aggregated cont columns
+
+    # stack the dataframes and modify the new column names
+    dispatch = dispatch.stack().reset_index().rename({'level_1':'Market',0:'Dispatch_MW'},axis=1).set_index([indexName,'Market'])
+    revenue = revenue.stack().reset_index().rename({'level_1':'Market',0:'Revenue_$'},axis=1).set_index([indexName,'Market'])
+    # Concatenate horizontally and set Timestamp as the sole index
+    revenue = pd.concat([revenue,dispatch],axis=1).reset_index().set_index(indexName)
+
+    # # add a column for daily profit
+    # td = pd.Timedelta(minutes=freq)
+    # for col in RRP.columns:
+    #     profit = results[f'{col}_Profit_$'].copy()
+    #     profit.index = profit.index - td
+    #     profit = profit.resample('d',loffset=td).sum() 
+    #     profit = profit.reindex(results.index,method='ffill')
+    #     results[f'{col}_DailyProfit_$'] = profit
     
-    # add a column for daily profit
-    td = pd.Timedelta(minutes=freq)
-    for col in RRP.columns:
-        profit = results[f'{col}_Profit_$'].copy()
-        profit.index = profit.index - td
-        profit = profit.resample('d',loffset=td).sum() 
-        profit = profit.reindex(results.index,method='ffill')
-        results[f'{col}_DailyProfit_$'] = profit
-    
-    return results
+    return results,operations
 
 def dailyPriceBands(Region,metaVal,priceBands,sMax,freq=5,mode='quarterly'):
     """
@@ -1195,7 +1225,7 @@ def thresh_smooth(data,freq,window,thresh,roll=False):
             rdata['group'] = [i//window for i in range(len(rdata))] # set up a grouping set
             # breakpoint()
             # rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,rname,roll=False))
-            rdata = rdata.groupby('group').apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=False),raw=True)
+            rdata = rdata.groupby('group')[col].apply(lambda dataSlice: thresh_flat(dataSlice,thresh,roll=False))
         # rdata = rdata[[rname]]
 
         DATA.append(rdata)
@@ -1205,6 +1235,9 @@ def thresh_smooth(data,freq,window,thresh,roll=False):
 
     # shift the index
     data.index = rdata.index + pd.Timedelta(minutes=freq)
+
+    # There will be some missing timestamps at the start due to the rolling average
+    data.fillna(method='bfill',inplace=True)
     
     # add a new column to identify the new data based on the name of the functionhgo
     data['modFunc'] = thresh_smooth.__name__
@@ -1218,11 +1251,11 @@ def thresh_flat(dataSlice,thresh,roll):
     The lambda function for thresh_smooth.
     """
     # print(dataSlice)
-    # breakpoint()
+    
     if roll:
         dRange = abs(dataSlice.max() - dataSlice.min())
     else:
-        # dRange = abs(dataSlice[rname].max() - dataSlice[rname].min())
+        # dRange = abs(dataSlice[group].max() - dataSlice[group].min())
         dRange = abs(dataSlice.max() - dataSlice.min())
     # print(dRange)
     # print(dataSlice.mean())
@@ -1237,3 +1270,5 @@ def thresh_flat(dataSlice,thresh,roll):
             dataSlice.loc[:] = dataSlice.mean()
     # print(dataSlice)
     return dataSlice
+
+# def stackData(data,primaryKeys,valCol,)

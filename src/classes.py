@@ -43,7 +43,8 @@ class NEM(Network):
 
     def procPrice(self,freq,region,t0,t1,modFunc=None,**kwargs):
         """
-        Process pricing data. Takes in rawData from NEM.rawData['Price'] and dumps it into self.procData['Price']
+        Process pricing data. Takes in rawData from NEM.rawData['Price'], averages to a given frequency, modifies with modFunc,
+        converts to stacked schema, and dumps it into self.procData['Price'].
         """
         try:
             RRP = self.rawData['Price'].copy()
@@ -89,16 +90,24 @@ class NEM(Network):
         # RRP['scenario'] = scenario
 
         RRP['freq'] = freq
+        breakpoint()
+        # stack
+        name = RRP.index.name
+        RRP = RRP.reset_index()
+        RRP.set_index([col for col in RRP if 'RRP' not in col],inplace=True)
+        RRP.columns = [col.replace('RRP','') for col in RRP] # drop RRP from index so we can have a common 'Market' key
+        RRP.rename({'':'Energy'},axis=1,inplace=True) # convert what was originally RRP to 'Energy'
+        RRP = RRP.stack().reset_index().rename({f'level_{len(RRP.index.names)}':'Market',0:'RRP'},axis=1).set_index(name) # stack by market as well
 
         # Add RRP to the procData record
         newData = self.procData['Price'].copy().append(RRP)
 
-        # drop duplicate records before adding to self
-        name = newData.index.name
+        # drop duplicate records
         newData.reset_index(inplace=True)
         newData.drop_duplicates(inplace=True)
         newData.set_index(name,inplace=True)
 
+        # add to self
         self.procData['Price'] = newData
 
         return RRP
@@ -331,10 +340,12 @@ class Gen(object):
         except IndexError as e:
             if self.modFunc:
                 # Create our input data and store it in a network object
-                rrp_mod = Network.procPrice(self.freq,self.region,self.markets,t0,t1,self.scenario,self.modFunc,**self.kwargs)
+                rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,**self.kwargs)
             else:
                 errFunc(e)
-
+        except KeyError:
+            rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,**self.kwargs)
+            
         # zero columns based on markets
         for myRRP in [rrp,rrp_mod]:
             if type(myRRP) == pd.core.frame.DataFrame:
@@ -342,13 +353,14 @@ class Gen(object):
                 # Zero by RRP
                 for col in myRRP.columns:
                     if col not in self.markets:
-                        myRRP[col] = 0
+                        myRRP.loc[:,col] = 0
 
         return rrp,rrp_mod
 
 class BESS(Gen):
     def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,freq=30,scenario='RRP',Smax=2,modFunc=None,**kwargs):
         """
+        Same as parent __init__() but adds Smax as an attribute and also to settings.
 
         """
         super(BESS,self).__init__(path,region,Di=Di,Fh=Fh,Fr=Fr,freq=freq,scenario=scenario,modFunc=modFunc,**kwargs)
@@ -358,6 +370,8 @@ class BESS(Gen):
                 'Smax':Smax
             }
         )
+        self.results = pd.DataFrame()
+        self.operations = pd.DataFrame()
 
     def optDispatch(self,Network,m,t0,t1,debug=False):
         """
@@ -385,10 +399,7 @@ class BESS(Gen):
         else:
             Fh = self.Fh # otherwise, interpret as number of hours
 
-        breakpoint()
-        results = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_mod=rrp_mod)
+        results,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_mod=rrp_mod)
 
-        # Return the RRP signal passed through the optimiser as well as the one that is evaluated. Return as a stacked dataframe where
-        # the original is flagged with the word 'Orig' and the one from the optimiser is flagged according to the algorithm used.
-
-        return results
+        self.results = self.results.append(results)
+        self.operations = self.operations.append(operations)

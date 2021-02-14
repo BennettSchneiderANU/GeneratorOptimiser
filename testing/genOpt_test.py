@@ -11,9 +11,8 @@ t0 = dt.datetime(2020,1,1)
 t1 = dt.datetime(2020,2,1)
 region = 'NSW1'
 path = os.path.dirname(os.path.realpath(__file__))
-bess = go.BESS(path,region,scenario='RegCoopt')
 nem = go.NEM(path)
-m = Model(sense='Max')
+m = Model(sense='MAX')
 #%%
 data_path = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\RRP.csv"
 RRP = pd.read_csv(data_path,index_col=0)
@@ -22,10 +21,13 @@ RRP.index.name = 'Timestamp'
 #%% Create price input and run optimiser
 # load modified rrp into nem
 nem.loadRaw(RRP, 5, 'Price')
-nem.procPrice(30, region, bess.markets, t0, t1, bess.scenario, go.thresh_smooth,window=4,thresh=40,roll=True)
+# nem.procPrice(30, region, t0, t1,modFunc=bess.modFunc,**bess.kwargs)
+#%%
+bess1 = go.BESS(path,region,scenario='RRP',modFunc=go.thresh_smooth,window=4,thresh=40,roll=True)
+bess2 = go.BESS(path,region,scenario='RRP',modFunc=None)
 #%%
 # run optimised dispatch usinf preload
-bess.optDispatch(nem, m, t0, t1, modFunc=go.thresh_smooth,window=4,thresh=40,roll=True)
+bess1.optDispatch(nem, m, t0, t1)
 #%%
 # RRP_orig = RRP.copy()
 # RRP_orig['modFunc'] = 'orig'
