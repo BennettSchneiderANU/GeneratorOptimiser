@@ -446,11 +446,11 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
         optRRP = rrp.copy()
 
     # make rrp a list so can use in optimiser
-    enRRP = list(optRRP['RRP']) # Energy rrp
-    regRaiseRRP = list(optRRP['RAISEREGRRP'])
-    regLowerRRP = list(optRRP['LOWERREGRRP'])
-    contRaiseRRP = list(optRRP[['RAISE6SECRRP','RAISE60SECRRP','RAISE5MINRRP']].sum(axis=1)) # Sum of the contingency raise market
-    contLowerRRP = list(optRRP[['LOWER6SECRRP','LOWER60SECRRP','LOWER5MINRRP']].sum(axis=1)) # Sum of the contingency lower market
+    enRRP = list(optRRP['Energy']) # Energy rrp
+    regRaiseRRP = list(optRRP['RAISEREG'])
+    regLowerRRP = list(optRRP['LOWERREG'])
+    contRaiseRRP = list(optRRP[['RAISE6SEC','RAISE60SEC','RAISE5MIN']].sum(axis=1)) # Sum of the contingency raise market
+    contLowerRRP = list(optRRP[['LOWER6SEC','LOWER60SEC','LOWER5MIN']].sum(axis=1)) # Sum of the contingency lower market
     
     hr_frac = freq/60 # convert freq to fraction of hours
     
@@ -607,9 +607,8 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     
     # Splits the profit out by raise/lower Reg/Cont markets
     for col in rrp.columns:
-        if col == 'RRP':
-            varStr = 'Energy_MW'
-        elif 'LOWER' in col:
+        
+        if 'LOWER' in col:
             if 'REG' in col:
                 varStr = 'REGLOWER_MW'
             else:
@@ -620,12 +619,11 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
             else:
                 varStr = 'CONTRAISE_MW'
 
+        else:
+            varStr = col + '_MW'
+
         try:
-            if col == 'RRP':
-                col2 = 'Energy'
-            else:
-                col2 = col.replace('RRP','')
-            results[f"{col2}_$"] = rrp[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
+            results[f"{col}_$"] = rrp[col]*results[varStr]*hr_frac # half hour settlements, so multiply all profits by hr_frac
         except TypeError:
             pass
 
@@ -768,7 +766,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
     # for i in range(0,int(days*24*60/tInt)):
 
     for i in range(0,int(freq*(len(RRP))/tInt)):
-              
+        # breakpoint()
         start = int(numInts*i*tInt/60) # define start of the interval
         end = int(numInts*(i*tInt/60+tFcst)) # define end of the interval
         
@@ -776,6 +774,11 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
             start -= 1 # go back one time-step so we get an overlap of the initial conditions
         
         rrp_frame = RRP.iloc[start:end]
+        
+        # Note for future (as of 14/2/21):
+        # Use rrp_frame.index[0] and rrp_frame.index[-1] to 
+        # determine the time slice for rrp_mod, which must be compatible 
+        # with a forecasted dataset
         if type(rrp_mod) == pd.core.frame.DataFrame:
             rrp_frame_mod = rrp_mod.iloc[start:end]
         else:
@@ -850,7 +853,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
     #     profit = profit.reindex(results.index,method='ffill')
     #     results[f'{col}_DailyProfit_$'] = profit
     
-    return results,operations
+    return revenue,operations
 
 def dailyPriceBands(Region,metaVal,priceBands,sMax,freq=5,mode='quarterly'):
     """

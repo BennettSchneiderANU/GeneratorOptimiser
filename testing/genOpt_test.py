@@ -21,13 +21,24 @@ RRP.index.name = 'Timestamp'
 #%% Create price input and run optimiser
 # load modified rrp into nem
 nem.loadRaw(RRP, 5, 'Price')
-# nem.procPrice(30, region, t0, t1,modFunc=bess.modFunc,**bess.kwargs)
 #%%
-bess1 = go.BESS(path,region,scenario='RRP',modFunc=go.thresh_smooth,window=4,thresh=40,roll=True)
-bess2 = go.BESS(path,region,scenario='RRP',modFunc=None)
+bess1 = go.BESS(path,region,scenario='Energy',modFunc=go.thresh_smooth,window=4,thresh=40,roll=True)
+bess2 = go.BESS(path,region,scenario='Energy',modFunc=None)
+#%%
+# nem.procPrice(30, region, t0, t1,pivot=True,modFunc=bess1.modFunc,**bess1.kwargs)
+# rrp,rrp_mod = bess1.getRRP(nem,t0,t1)
 #%%
 # run optimised dispatch usinf preload
 bess1.optDispatch(nem, m, t0, t1)
+bess2.optDispatch(nem, m, t0, t1)
+#%%
+revenue = bess1.revenue.copy().reset_index().set_index(['Timestamp','Market']).stack().reset_index()
+#%%
+revenue = bess1.stackRevenue()
+figure = px.line(revenue,x='Timestamp',y='Value',color='Market',line_dash='Result')
+# plot(figure)
+sy = [d.name for d in figure.data if '$' in d.name]
+go.plotlyPivot(None,figure,secondary_y=sy,y2lim=[-300,300])
 #%%
 # RRP_orig = RRP.copy()
 # RRP_orig['modFunc'] = 'orig'

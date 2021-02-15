@@ -55,7 +55,7 @@ class NEM(Network):
 
             t1 (datetime): THe end of the desired slice of the raw data.
 
-            pivot (boo. Default=False): If True, outputs the pivoted price according to the given market to which it applies. If false, outputs as a stacked
+            pivot (bool. Default=False): If True, outputs the pivoted price according to the given market to which it applies. If false, outputs as a stacked
                 table consisting of 'Market' and 'RRP' columns. This modification DOES NOT apply to the version of the data which is stored in the caller under self.procData['Price'],
                 which is always fully stacked.
 
@@ -380,11 +380,15 @@ class Gen(object):
         except IndexError as e:
             if self.modFunc:
                 # Create our input data and store it in a network object
-                rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,pivot=True,**self.kwargs)
+                RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**self.kwargs)
+                rrp = RRP[RRP['modFunc'] == 'Orig']
+                rrp_mod = RRP[RRP['modFunc'] != 'Orig']
             else:
                 errFunc(e)
-        except KeyError:
-            rrp_mod = Network.procPrice(self.freq,self.region,t0,t1,self.modFunc,pivot=True,**self.kwargs)
+        except KeyError as e:
+            RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**self.kwargs)
+            rrp = RRP[RRP['modFunc'] == 'Orig']
+            rrp_mod = RRP[RRP['modFunc'] != 'Orig']
     
         # zero columns based on markets
         my_rrp = [rrp,rrp_mod]
@@ -441,16 +445,29 @@ class BESS(Gen):
         # Get the dispatch interval
         if type(self.Di) == str: # if a string, should be of the form '/num'
             Di = int(round(len(rrp)/float(self.Di.replace('/','')),0)) # interpret as fraction of total number of intervals
+            Di *= self.freq # convert from number of intervals to minutes
         else:
             Di = self.Di # otherwise, interpret as number of minutes
         
         # Get the forecast horizon
         if type(self.Fh) == str: # if a string, should be of the form '/num'
             Fh = int(round(len(rrp)/float(self.Fh.replace('/','')),0)) # interpret as fraction of total number of intervals
+            Fh *= self.freq/60 # convert from number of intervals to hours
         else:
             Fh = self.Fh # otherwise, interpret as number of hours
+            
 
-        results,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_mod=rrp_mod)
+        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_mod=rrp_mod)
 
-        self.results = self.results.append(results)
+        self.revenue = self.results.append(revenue)
         self.operations = self.operations.append(operations)
+
+    def stackRevenue(self,setIndex=False):
+        """
+        Fully stacks revenue attribute for plotting convenience.
+        """
+        name = self.revenue.index.name
+        revenue = self.revenue.copy().reset_index().set_index(['Timestamp','Market']).stack().reset_index().rename({'level_2':'Result',0:'Value'},axis=1)
+        if setIndex:
+            revenue.set_index(name,inplace=True)
+        return revenue

@@ -8,6 +8,7 @@ import os
 
 def plotlyPivot(
     data,
+    figure=None,
     Line=[],
     Scatter=[],
     Bar=[],
@@ -47,6 +48,9 @@ def plotlyPivot(
     
     Args:
         data (pandas DataFrame): Any pandas DataFrame.
+
+        figure (plotly figure. Default=None): If this is used, will use the data already in the figure as the base, but any layout settings set by this function will be applied,
+            including secondary y settings.
         
         Line (list of strs. Default=[]): List of column names in data you want to plot on a line plot.
         
@@ -114,7 +118,8 @@ def plotlyPivot(
     fig = make_subplots(specs=[[{"secondary_y": True}]])
 
     if len(Line) == 0 and len(Bar) == 0 and len(Scatter) == 0:
-        Line = list(data.columns)
+        if not figure:
+            Line = list(data.columns)
 
     if type(colorList) == list:
         colorList = {'Scatter': colorList,'Line': colorList,'Bar': colorList}
@@ -235,6 +240,23 @@ def plotlyPivot(
             fig.update_layout(barmode='stack')
         elif relative:
             fig.update_layout(barmode='relative')
+    
+    for d in figure.data:
+        col = d.name
+        try:
+            name = labels[col]
+        except KeyError:
+            name = col
+            
+        if col in secondary_y:
+            sy = True
+        else:
+            sy = False
+            
+        fig.add_trace(d,
+            secondary_y = sy
+            )
+
     
     
     # fig.update_yaxes(title_text=ylabel)
