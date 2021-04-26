@@ -67,6 +67,44 @@ def timeAvgEnd(data,in_freq,out_freq):
 
     return data
 
+def aggEnd(data,inFreq,outFreq,func=np.sum,kind='timestamp'):
+    """
+    Wrapper around pandas.DataFrame.agg() that specifically applied period-ending convention.
+
+    Args:
+        data (pandas DataFrame): Any dataframe with a datetimeindex as the index.
+
+        inFreq (str): Any standard time format as suitable for resample that denotes the frequency of the input data.
+
+        outFreq (str): Any standard time format as suitable for resample that denotes the frequency of the output data.
+
+        func (function, str, list or dict): Function to use for aggregating the data. If a function, must either work when passed a DataFrame or when passed to DataFrame.apply.
+            Accepted combinations are:
+              - function
+              - string function name
+              - list of functions and/or function names, e.g. [np.sum, 'mean']
+              - dict of axis labels -> functions, function names or list of such.
+              
+        kind (str. Default=None): pandas.DataFrame.resample() input. Either 'period' or 'timestamp'. Pass ‘timestamp’ to convert the resulting 
+            index to a DateTimeIndex or ‘period’ to convert it to a PeriodIndex. By default we use 'timestamp'.
+            Use 'period' for monthly/yearly resamples!
+            
+    Returns:
+        data (pandas DatFrame): data, aggregated according to outFreq. Can be aggregated using different functions according to pandas.DataFrame.agg().
+
+    Use this function to flexibly aggregate a dataframe according to period-ending convention.
+    
+    Created on 28/01/2021 by Bennett Schneider
+
+    """
+    data = data.copy() # copy input data to avoid messing with the input
+    data = data.shift(-1,freq=inFreq) # shift back by 1
+    data = data.resample(outFreq,kind=kind).agg(func) # resample and aggregate
+    if kind == 'timestamp':
+        data = data.shift(1,freq=outFreq) # shift forward by 1
+
+    return data
+
 # def BESS_COINOR(rrp,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,write=False,debug=True):
 #     """
 #     Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
