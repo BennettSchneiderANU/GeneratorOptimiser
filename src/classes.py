@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import pickle as pkl
+# import opennem
 
 from analysis_functions import *
 from error_handling import *
@@ -30,8 +31,6 @@ class Network(object):
         self.procData[name] = pd.DataFrame() # create empty matching procData entry 
         self.rawFreq[name] = freq
 
-    
-
 class NEM(Network):
     """
     NEM-specific version of Network object.
@@ -40,6 +39,13 @@ class NEM(Network):
     def __init__(self,path):
         super(NEM,self).__init__(path)
         self.regionStr='REGIONID'
+
+    # def loadOpenNEM(self,start,end,region=None):
+    #     """
+    #     Loads data from opennem.
+    #     """
+    #     if region:
+    #         data_5min = opennem.web_api.load_data(d1=start,d2=end,region=self.region.lower(),split=False).fillna(method='bfill')
 
     def procPrice(self,freq,region,t0,t1,pivot=False,modFunc=None,**kwargs):
         """

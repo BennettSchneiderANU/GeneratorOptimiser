@@ -16,9 +16,24 @@ import zipfile
 import shutil
 import numpy as np
 import random
+import copy
+import dateutil.relativedelta as rdelta
+import h5py
 myPath = os.getcwd()
+# /mnt/wls2/fcas/old_individual_files/
+#%% Extract data from one hdf5 file so we can get a better record
+file_path = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\fcas_reg\FCAS_202102282355.hdf5"
+f = h5py.File(file_path, 'r')
+#%%
+values = pd.Series([val[0] for val in f['df']['block1_values'][:]],index=f['df']['axis1'][:],name=f['df']['block1_items'][:][0])
+df = pd.DataFrame(f['df']['block2_values'][:],columns=f['df']['block2_items'][:],index=values.index)
+df = pd.concat([df,values],axis=1)
+df.columns = [col.decode('utf-8') for col in df.columns]
+df['Timestamp'] = [dt.datetime.fromtimestamp(int(epoch_time)*10**-9) for epoch_time in df.index]
+df['Timestamp'] -= pd.Timedelta(11,unit='Hours') # unclear why the time correction is 11 hours, but it is, based on comparison with other raw data
+df = df.set_index('Timestamp')
 
-
+# print(df[df['element']==20022].loc['2021-03-01 10:30:00'])
 #%%
 
 def getNEMweb(url,data_path,num=None,filt='left'):
@@ -113,7 +128,10 @@ def unzipcsvs(data_path,files,**kwargs):
         # Read in the data from the processed folder
         for data_file in os.listdir(proc_path):
             
-            data.append(pd.read_csv(os.path.join(proc_path,data_file),**kwargs))
+            if '.zip' in data_file: # apply recursively
+                data.extend(unzipcsvs(proc_path,[data_file],**kwargs))
+            else:
+                data.append(pd.read_csv(os.path.join(proc_path,data_file),**kwargs))
             
         # Delete the folder we just made and all its contents
         shutil.rmtree(proc_path)
@@ -191,6 +209,7 @@ def match_set(df,col,match):
 #%% Define paths where data is stored/should be downloaded
 path_fcas = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\fcas_reg"  
 path_disload = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\dispatchload"
+path_prices = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\prices"
 #%% Download list of available files from the url
 url_fcas = r"http://www.nemweb.com.au/Reports/Current/Causer_Pays/"
 toget = getNEMweb(url_fcas,path_fcas)
@@ -199,11 +218,15 @@ toget = getNEMweb(url_fcas,path_fcas)
 url_disload = r"https://nemweb.com.au/Reports/Current/Next_Day_Dispatch/"
 toget = getNEMweb(url_disload,path_disload,num=-40,filt='left')
 
+#%%
+url_prices = r"https://nemweb.com.au/Reports/Archive/Public_Prices/"
+toget = getNEMweb(url_prices, path_prices)
+
 #%% Choose which 4s data to read in from zips
 # Define some time filter
-start = dt.datetime(2021,1,19)
-end = dt.datetime(2021,2,28)
-days_targ = 10
+start = dt.datetime(2021,3,1)
+end = dt.datetime(2021,3,2)
+days_targ = 2
 date_format = "%Y%m%d%H%M"
 
 
@@ -355,7 +378,8 @@ for day in days:
 
 fcas_5min_all = pd.concat(fcas_5min_all)
 fcas_5min_all = fcas_5min_all.replace(np.inf,np.nan)
-#%%
+
+#%% Calculate dispatch fraction and apply to fcas_5min_final
 fcas_5min_final = fcas_5min_all.copy()
 
 # Filter out bad values
@@ -371,6 +395,56 @@ for i,duid_group in fcas_5min_final.groupby('duid pre'):
         data = data[data[col] != 0] # exclude periods when not bid in to the reg marget
         fcas_groups.append(data)
 fcas_5min_final = pd.concat(fcas_groups)
+
+
+#%% Read the price data
+# prices are monthly
+start = fcas_5min_final['Timestamp'].min()
+start = dt.datetime(start.year,start.month,1)
+
+end = fcas_5min_final['Timestamp'].max() + rdelta.relativedelta(months=1)
+end = dt.datetime(end.year,end.month,1)
+#%%
+date_format = "%Y%m%d"
+
+files_prices = pd.Series({
+    dt.datetime.strptime(prices_dir.split('_')[-1].split('.')[0],date_format):prices_dir for prices_dir in os.listdir(path_prices) if '.zip' in prices_dir
+    }).sort_index()
+
+files_prices = files_prices[(files_prices.index >= start) & (files_prices.index < end)]
+
+toRead = list(files_prices)
+
+data_prices = unzipcsvs(path_prices,toRead,header=1,parse_dates=True,error_bad_lines=False)
+
+data_prices = pd.concat(data_prices)
+#%% Clean the dataframe
+prices_df = data_prices.copy()[data_prices['DREGION'] == 'DREGION'] # remove data from TREGION table
+
+index = ['INTERVENTION','REGIONID','SETTLEMENTDATE','RUNNO']
+cols = copy.deepcopy(index)
+cols.extend([col for col in data_prices if 'RRP' in col])
+prices_df = prices_df[cols].drop_duplicates().dropna(how='all') # remove duplicates
+prices_df['SETTLEMENTDATE'] = pd.to_datetime(prices_df['SETTLEMENTDATE'])
+
+# Stack by Market
+# prices_df = prices_df.set_index(index).stack().reset_index().rename({f"level_{len(index)}":'Market',0:'Value'},axis=1)
+# fig = px.line(prices_df,x='SETTLEMENTDATE',y='Value',color='Market',facet_row='REGIONID',facet_col='INTERVENTION')
+# plot(fig)
+#%% Map prices on to fcas_5min_final
+# map regionid
+regions = {'BALB': 'VIC1','GANNB': 'VIC1','HPR': 'SA1', 'LBB': 'SA1'}
+fcas_5min_final['REGIONID'] = fcas_5min_final['duid pre'].map(regions)
+
+fcas_5min_final = fcas_5min_final.set_index(['Timestamp','REGIONID'])
+fcas_5min_final['prikey'] = fcas_5min_final.index
+fcas_5min_final = fcas_5min_final.reset_index()
+    
+# map price based on timestamp and regionid
+price_cols = [col for col in prices_df if 'RRP' in col]
+for col in price_cols:
+    fcas_5min_final[col] = fcas_5min_final['prikey'].map(prices_df.set_index(['SETTLEMENTDATE','REGIONID'])[col])
+
 #%% Plot the 5min data
 multiindex = ['Timestamp','duid pre']
 toPlot = fcas_5min_final.copy().set_index(multiindex)[['RAISEREG','LOWERREG','RAISE_frac','LOWER_frac']].stack().reset_index().rename({f'level_{len(multiindex)}':'Variable',0:'Value'},axis=1)
@@ -380,6 +454,10 @@ plot(fig)
 #%% Plot histogram
 toPlot_hist = toPlot.copy() #toPlot[toPlot['Variable'].isin(['RAISE_frac','LOWER_frac'])]
 fig = px.histogram(toPlot_hist,x='Value',color='duid pre',facet_row='Variable').update_yaxes(matches=None).update_layout(xaxis={'range':[-1,1]})
+plot(fig)
+
+#%% Plot fraction against price
+fig = px.scatter(fcas_5min_final,x='LOWERREGRRP',y='LOWER_frac',color='duid pre')
 plot(fig)
 
 #%% Plot diurnal bar chart
