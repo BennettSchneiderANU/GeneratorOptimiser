@@ -81,25 +81,39 @@ def match_set(df,col,match):
     if myset == match:
         return df  
     
+def fcas_hdf5_to_df(file_path,df_key,):
+#%%
+for key,val in f['df'].items():
+    print(key)
+    print(val[:])
+    print("**************\n")
+    
 #%% Read the hdf5 files and convert to 5mins
 # folder_actual = r"/mnt/wls2/fcas/old_individual_files/"
 # files_actual = os.listdir(folder_actual)
 
 folder =  r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working\fcas_reg"
-files = [r"FCAS_202102282355.hdf5"]
+files = [r"FCAS_201912200925.hdf5"]
 for file in files:
     file_path = os.path.join(folder,file)
     print(f"Extract data from compressed file: {file}")
     f = h5py.File(file_path, 'r')
-    values = pd.Series([val[0] for val in f['df']['block1_values'][:]],index=f['df']['axis1'][:],name=f['df']['block1_items'][:][0])
-    df = pd.DataFrame(f['df']['block2_values'][:],columns=f['df']['block2_items'][:],index=values.index)
-    df = pd.concat([df,values],axis=1)
+    
+    # There appear to be two different forms of compressed file
+    try:
+        values = pd.Series([val[0] for val in f['df']['block1_values'][:]],index=f['df']['axis1'][:],name=f['df']['block1_items'][:][0])
+        df = pd.DataFrame(f['df']['block2_values'][:],columns=f['df']['block2_items'][:],index=values.index)
+        df = pd.concat([df,values],axis=1)
+    except KeyError:
+        df = pd.DataFrame(f['df']['block1_values'][:],columns=f['df']['block1_items'][:],index=f['df']['block0_values'][:])
+        df.index.name = f['df']['block0_items'][:][0]
+        
     df.columns = [col.decode('utf-8') for col in df.columns]
     df['Timestamp'] = [dt.datetime.fromtimestamp(int(epoch_time)*10**-9) for epoch_time in df.index]
     df['Timestamp'] -= pd.Timedelta(11,unit='Hours') # unclear why the time correction is 11 hours, but it is, based on comparison with other raw data
     
     df = df.rename({'element':'Element number','variable':'Variable number','value':'Value','quality':'Value quality'},axis=1)
-    
+    #%%
     print("Enrich data with lookups")
     variables = pd.read_csv(os.path.join(folder,'820-0079 csv.csv'),header=None,index_col=0)[1]
     elements = pd.read_csv(os.path.join(folder,'Elements_FCAS_202101201345.csv'),header=None,index_col=0)
