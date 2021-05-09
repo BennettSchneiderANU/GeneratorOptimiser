@@ -669,7 +669,8 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
 
 def BESS_COINOR_hurdle(
     rrp,
-    regDisFrac,
+    RFr,
+    LFr,
     m,
     freq=30,
     sMax=4,
@@ -697,9 +698,13 @@ def BESS_COINOR_hurdle(
         rrp (pandas DataFrame): Index should be a DatetimeIndex (although it doesn't HAVE to be). Columns are the names of each of the energy and FCAS
             markets, as shown in the AEMO tables. Values for RRP must be market prices in $/MWh. Values for FCAS must be in $/MW/hr.
 
-        regDisFrac (pandas DataFrame): Index should match rrp. Values are the fraction of enabled FCAS reg that is dispatched acros the given interval. 
-            Should have a RAISE column with raise fractions and a LOWER column with lower fractions. These values should be independent, i.e. the RAISE fraction need not
-            be 0 when the LOWER fraction is non-zero; they are independent distributions. 
+        RFr (float. Default=0.2): Average (volume-weighted) regulation raise dispatch fraction.
+
+        LFr (float. Default=0.2): Average (volume-weighted) regulation lower dispatch fraction.
+
+        Fr_dist (pandas DataFrame): Unweighted distribution of regulation raise dispatch fraction. Index is dispatch fraction, columns must be RAISE and LOWER and values are the
+            respective probabilities of those fractions which will be passed to the optimiser. Probabilties expressed between 0 and 1 and each column must add to 1. Recommended indices
+            are 0, 0.2, 0.4, 0.6, 0.8, 1. 
 
         hurdle (float. Default=20): Hurdle price given to the optimiser in $/MWh.
 
