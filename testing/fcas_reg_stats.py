@@ -184,7 +184,7 @@ plot(fig)
 #%% Calculate revenue-weighted average Fr, as per the notes
 # Cut this across any pre-defined set of groupings
 
-group = ['Hour','MPF'] # variable apart from Fr_bins you want to group by
+group = ['duid pre'] # variable apart from Fr_bins you want to group by
 
 def calc_bn(data_group,market,group):
     group_dist = copy.deepcopy(group)
@@ -194,6 +194,7 @@ def calc_bn(data_group,market,group):
     # set the index so it gels with the caller
     bn = bn.reset_index().drop(group,axis=1).set_index(f'{market}_frac_bins')
     bn.columns = ['bn']
+    bn['Fr'] = (bn['bn']*bn.index).sum() # this is the revenue-weighted average Fr for this group
     return bn
 
 bn = pd.DataFrame()
@@ -201,8 +202,17 @@ for market in ['RAISE','LOWER']: # for each market
     # Calculate F_T distribution across a number of different groupings
     bn_part = data.groupby(group).apply(lambda x: calc_bn(x,market,group)).reset_index().rename({f'{market}_frac_bins':'Fr_bins'},axis=1)
     bn_part['Market'] = market
+    if market == 'LOWER':
+        bn_part['Fr'] *= -1
     bn = bn.append(bn_part)
 
-#%% Plot revenue-weighted average
-fig = px.bar(bn,x='Fr_bins',y='bn',facet_row='Hour',facet_col='MPF',color='Market',barmode='relative').update_xaxes(matches=None)
+# Plot revenue-weighted average
+facet_row='Market'
+facet_col = 'duid pre'
+color=None
+fig = px.bar(bn,x='Fr_bins',y=['bn','Fr'],facet_row=facet_row,facet_col=facet_col,color=color,barmode='group').update_xaxes(matches=None)
 plot(fig)
+#%% Save
+suffix = '-'.join(e for e in [facet_row,facet_col,color] if e)
+fig.write_html(os.path.join(export,f'Fr_distribution_{suffix}.html'))
+
