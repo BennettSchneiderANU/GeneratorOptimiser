@@ -669,15 +669,16 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
 
 def BESS_COINOR_hurdle(
     rrp,
-    RFr,
-    LFr,
     m,
+    RFr=0.2,
+    LFr=0.2,
+    Fr_dist=None,
+    hurdle=0,
     freq=30,
     sMax=4,
     st0=2,
     eta=0.8,
     rMax=1,
-    regDict={"RAISE":{},"LOWER":{}},
     write=False,
     debug=True,
     rrp_mod=None,
@@ -698,17 +699,17 @@ def BESS_COINOR_hurdle(
         rrp (pandas DataFrame): Index should be a DatetimeIndex (although it doesn't HAVE to be). Columns are the names of each of the energy and FCAS
             markets, as shown in the AEMO tables. Values for RRP must be market prices in $/MWh. Values for FCAS must be in $/MW/hr.
 
-        RFr (float. Default=0.2): Average (volume-weighted) regulation raise dispatch fraction.
+        m (MIP model): An empty model object.
 
-        LFr (float. Default=0.2): Average (volume-weighted) regulation lower dispatch fraction.
+        RFr (float. Default=0.2): Deterministic constant based on the revenue-weighted average regulation raise dispatch fraction.
+
+        LFr (float. Default=0.2): ADeterministic constant based on the revenue-weighted average regulation lower dispatch fraction.
 
         Fr_dist (pandas DataFrame): Unweighted distribution of regulation raise dispatch fraction. Index is dispatch fraction, columns must be RAISE and LOWER and values are the
             respective probabilities of those fractions which will be passed to the optimiser. Probabilties expressed between 0 and 1 and each column must add to 1. Recommended indices
             are 0, 0.2, 0.4, 0.6, 0.8, 1. 
 
-        hurdle (float. Default=20): Hurdle price given to the optimiser in $/MWh.
-
-        m (MIP model): An empty model object.
+        hurdle (float. Default=0): Hurdle price given to the optimiser in $/MWh.
         
         freq (int. Default=30): Frequency of your rrp time-series in minutes.
         
@@ -720,11 +721,6 @@ def BESS_COINOR_hurdle(
         
         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
-        
-        regDict (dict of dict of floats. Default={}: Top level keys are RAISE and LOWER. Within these, the nested dictionary must contaim the probability distribution of 
-            fraction of enabled FCAS reg RAISe and LOWER respectively that is assumed to be dispatched by the optimiser. Keys should be a probability such that the sum of the 
-            keys = 1 in each case. The values should the value of regDisFrac corresponding to each probability.
-            If an empty dictionary is passed, the actual regDisFrac is passed to the optimiser.
         
         write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
             This will let the function write the results of the optimisation to that location in lp format.
@@ -769,14 +765,16 @@ def BESS_COINOR_hurdle(
     regLowerRRP = list(optRRP['LOWERREG'])
     contRaiseRRP = list(optRRP[['RAISE6SEC','RAISE60SEC','RAISE5MIN']].sum(axis=1)) # Sum of the contingency raise market
     contLowerRRP = list(optRRP[['LOWER6SEC','LOWER60SEC','LOWER5MIN']].sum(axis=1)) # Sum of the contingency lower market
-
-    # do the same for regDisFrac
-    RaiseFr = list(regDisFrac['RAISE'])
-    LowerFr = list(regDisFrac['LOWER'])
     
     hr_frac = freq/60 # convert freq to fraction of hours
     
     n = len(optRRP) # Get the length of the optimisation
+
+    if type(Fr_dist) != pd.core.frame.DataFrame:
+        if Fr_dist == None:
+            Fr_dist = pd.DataFrame({'RAISE':[RFr],'LOWER':[LFr]},index=[1]) # if None, allow the objective function complete deterministic knowledge of Fr
+        else:
+            sys.exit("Please enter Fr_dist as either None or a pandas DataFrame, as per the documentation for analysis_functions.BESS_COINOR_hurdle()")
     
     #########################################
     ############# Add variables #############
@@ -789,23 +787,6 @@ def BESS_COINOR_hurdle(
     # Binary variables that control whether the battery is charging or discharging
     bdt = [m.add_var(name=f'bdt_{i}',var_type='B') for i in range(n)] # 1 during discharge
     bct = [m.add_var(name=f'bct_{i}',var_type='B') for i in range(n)] # 1 during charge
-
-    # Binary variables that control whether the battery is dispatched in RAISE or LOWER
-    bRt = [m.add_var(name=f'bRt_{i}',var_type='B') for i in range(n)] # 1 during RAISE (discharge)
-    bLt = [m.add_var(name=f'bLt_{i}',var_type='B') for i in range(n)] # 1 during LOWER (charge)
-    
-    # collect a dictionary of possible reg discharge values (a distribution)
-    # If regDict[market] is empty, just set the key for regDtDist to 1, otherwise use the keys from refDict.
-    Fr_dist = {}
-    for market,rd in regDict.items():
-        # rd should be a dictionary with the prob distributions, or otherwise should be empty.
-        if len(rd) == 0:
-            keys = [1]
-        else:
-            keys = rd.keys()
-        Fr_dist[market] = {}
-        for key in keys:
-            Fr_dist[market][key] = [m.add_var(name=f'regDt_dist_{i}',lb=-1,ub=1) for i in range(n)] # Collection of dispatched FCAS reg discharge rate as seen by the optimiser, t. Ratio of max charge rate (MW)
 
     regDt = [m.add_var(name=f'regDt_{i}',lb=0,ub=1) for i in range(n)] # Actual dispatched FCAS reg discharge rate, t. Ratio of max charge rate (MW)
     regCt = [m.add_var(name=f'regCt_{i}',lb=0,ub=1) for i in range(n)] # Actual dispatched FCAS reg charge rate, t. Ratio of max charge rate (MW)
@@ -823,6 +804,8 @@ def BESS_COINOR_hurdle(
     #########################################
     ############ Add constraints ############
     #########################################
+    phi_t = []
+    m += st[0] == st0, 'initial_condition'
     for i in range(1,n):
         # Force dispatch commands to 0 if their market is not represented to avoid perverse storage behaviour
         if sum(enRRP) == 0:
@@ -844,103 +827,51 @@ def BESS_COINOR_hurdle(
         m += bdt[i] + bct[i] == 1
         m += dt[i] <= rMax*bdt[i] # constrain discharge
         m += ct[i] <= rMax*bct[i] # constrain charge
-        
-        # Net dispatched discharge - charge (independent of Reg)
-        d_net = dt[i] - ct[i]
 
-        # Apply the binary variables to constrain the RAISE/LOWER behaviour (can be enabled in both RAISE and LOWER but not dispatched in both, insofar as Fr is derived)
-        m += bRt[i] + bLt[i] == 1
+        # Fraction of FCAS reg raise/lower that is dispatched. Can be dispatched in both at the same time in principle
+        m += regDt[i] == RFr*Reg_Rt[i], f'regraise_dispatch_{i}' # deterministic constant based on the revenue-weighted average
+        m += regCt[i] == LFr*Reg_Lt[i],f'reglower_dispatch_{i}' # deterministic constant based on the revenue-weighted average
 
-        # Fraction of FCAS reg raise/lower that is dispatched. Calculate as a ratio between what is charged and discharged such that regDisFrac*Raise is dispatched if all raise,
-        # regDisFrac*Lower if all lower, and 0 if Raise = Lower. Linear interp in between
-        m += regDt[i] == bRt[i]*RaiseFr[i]*Reg_Rt[i], f'regraise_dispatch_{i}'
-        m += regCt[i] == bLt[i]*LowerFr[i]*Reg_Lt[i],f'reglower_dispatch_{i}'
+        # Net dispatched discharge and charge volumes 
+        dt_net = dt[i] + regDt[i] 
+        ct_net = ct[i] + regCt[i]
 
-        # Net dispatched regulation discharge - charge
-        Reg_net = regDt[i] - regCt[i]
-        
-        # if regDict is empty, pass the actual regDisFrac to the optimiser
-        for market,rd in regDict.items():
-            if len(rd) == 0:
-                if market == 'RAISE':
-                    m += Fr_dist[market][1][i] == RaiseFr[i]*Reg_Rt[i], f'regraise_dispatch_{rdfrac}_{i}' # actual regulation raise dispatch 
-                elif market == 'LOWER':
-                    m += Fr_dist[market][1][i] == LowerFr[i]*Reg_Lt[i], f'reglower_dispatch_{rdfrac}_{i}' # actual regulation lower dispatch
-            else:
-                for rdfrac in regDict.keys():
-                    # breakpoint()
-                    if market == 'RAISE':
-                        m += regDtDist[market][rdfrac][i] == rdfrac*(Reg_Rt[i] - Reg_Lt[i]), f'reg_dispatch_{rdfrac}_{i}' # regulation raise dispatch under different regulation dispatch fraction scenarios
-
-        
-
-        # If discharging, we lose extra capacity due to inefficiency, compared to what is actually output, but the solution becomes non-linear if we add
-        # such a constraint.
-        # Instead, embed the round trip efficiency into the storage cap. Essentially storage level represents the 'available' energy to be exported
-
-        m += st[i] - st[i-1] + eta*hr_frac*(dt[i] + regDt[i]) == 0, f'storage_level_{i}' # The optimiser abuses the power of having a deterministic regDt. Accordingly, ensure regDisFrac is set small.
-        # Dt = (abs(dt[i] + regDt[i]) + (dt[i] + regDt[i]))/2
-        # Ct = (-abs(dt[i] + regDt[i]) + (dt[i] + regDt[i]))/2
-        # m += st[i] - st[i-1] - hr_frac*(eta*Ct + (1/eta)*Dt) == 0, f'storage_level_{i}' # The optimiser abuses the power of having a deterministic regDt. Accordingly, ensure regDisFrac is set small.
+        # Apply the most accurate bess storage model
+        m += st[i] - st[i-1] + hr_frac*(eta*dt_net - ct_net/eta) == 0, f'storage_level_{i}' 
 
         # Apply FCAS reg raise constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
-        # # m += Reg_Rt[i] <= maxAvail, f"RegRaise_cap_{i}"                                             # Effective RReg FCAS MaxAvail
         m += Reg_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_RegRaise_cap_{i}"             # (Effective RReg EnablementMax - Energy Target) / Upper Slope Coeff RReg
-        # # m += Reg_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegRaise_cap_{i}"             # (Energy Target - Effective RReg EnablementMin) / Lower Slope Coeff RReg. (Lower slope is undefined for raise)
         m += Reg_Rt[i] <= (enablementMax - dt[i] - upperSlope*Cont_Rt[i]), f"RegRaise_jointCap_{i}" # Offer Cont. Raise EnablementMax - Energy Target - (Upper Slope Coeff Cont. Raise x Cont. Raise Target)
-        # # m += Reg_Rt[i] >= 0, f"RegRaise_floor_{i}"                                                  # if < 0, then it's reg lower, not raise
-        # m += st[i] - ((Reg_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"RegRaise_storeCap_{i}"                         # Must always have enough storage to be dispatched for the entire period
 
         # Apply FCAS reg lower constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
-        # # m += Reg_Lt[i] <= maxAvail, f"RegLower_cap_{i}"                                              # Effective LReg FCAS MaxAvail
-        # # m += Reg_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_RegLower_cap_{i}"              # (Effective LReg EnablementMax - Energy Target) / Upper Slope Coeff LReg. (Upper slope is undefined for lower)
         m += Reg_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_RegLower_cap_{i}"             # (Energy Target - Effective LReg EnablementMin) / Lower Slope Coeff LReg
         m += Reg_Lt[i] <= (-enablementMin + dt[i] - lowerSlope*Cont_Lt[i]), f"RegLower_jointCap_{i}"  # Offer Cont. Lower EnablementMax - Energy Target - (Lower Slope Coeff Cont. Raise x Cont. Lower Target)
-        # # m += Reg_Lt[i] >= 0, f"RegLower_floor_{i}"                                                   # if < 0, then it's reg raise, not lower
-        # m += st[i] + (Reg_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"RegLower_storeCap_{i}"                       # Must always have enough storage to be dispatched for the entire period
 
         # Apply FCAS contingecy raise constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
-        # # m += Cont_Rt[i] <= maxAvail, f"ContRaise_cap_{i}"                                   # Effective RCont FCAS MaxAvail
         m += Cont_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_ContRaise_cap_{i}"   # (Offer Rxx EnablementMax - Energy Target) / Upper Slope Coeff Rxx
-        # # m += Cont_Rt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContRaise_cap_{i}"   # (Energy Target - Offer Rxx EnablementMin) / Lower Slope Coeff Rxx. (Lower slope is undefined for raise)
-        # # m += Cont_Rt[i] <= (enablementMax - dt[i] - Reg_Rt[i])/upperSlope                 # (Offer Rxx EnablementMax - Energy Target - RReg Target) / Upper Slope Coeff Rxx # replicated above
-        # # m += Cont_Rt[i] >= 0, f"ContRaise_floor_{i}"                                        # if < 0, then it's cont lower, not raise
-        # m += st[i] - ((Cont_Rt[i] + dt[i])/eta)*hr_frac >= 0,f"ContRaise_storeCap_{i}"               # Must always have enough storage to be dispatched for the entire period
 
         # Apply FCAS contingecy lower constraints. Assume all cont. raise are always bid the same. Therefore the following apply:
-        # # m += Cont_Lt[i] <= maxAvail, f"ContLower_cap_{i}"                                   # Effective LCont FCAS MaxAvail
-        # # m += Cont_Lt[i] <= (enablementMax + dt[i])/upperSlope, f"Upper_ContLower_cap_{i}"   # (Offer Lxx EnablementMax - Energy Target) / Upper Slope Coeff Lxx. (Upper slope is undefined for
-        #  lower)
         m += Cont_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContLower_cap_{i}"  # (Energy Target - Offer Lxx EnablementMin) / Lower Slope Coeff Lxx
-        # # m += Cont_Lt[i] <= (enablementMax + dt[i] - Reg_Lt[i])/lowerSlope                 # (Offer Lxx EnablementMax - Energy Target - LReg Target) / Lower Slope Coeff Lxx # replicated above
-        # # m += Cont_Lt[i] >= 0, f"ContLower_floor_{i}"                                        # if < 0, then it's cont raise, not lower
-        # m += st[i] + (Cont_Lt[i] - dt[i])*hr_frac*eta <= sMax,f"ContLower_storeCap_{i}"            # Must always have enough storage to be dispatched for the entire period
         
-
         # Joint storage capacity constraint (energy, reg, and cont).
         m += st[i] >= (hr_frac/eta)*((Reg_Rt[i] + dt[i]) + 2*(Cont_Rt[i])), f"Raise_jointStorageCap_{i}" # assume that energy, reg, and contingency raise are all dispatched at one. Cont can last up to 10mins, not 5
         m += sMax >= st[i] + eta*hr_frac*((Reg_Lt[i] - dt[i]) + 2*Cont_Lt[i]), f"Lower_jointStorageCap_{i}" # same as above, reverse signs for reg an cont, but keep same sign for dt
 
 
+        ###### Construct Objective #######
 
-    m += st[0] == st0, 'initial_condition'
+        # Weighted average of the component of revenue paid by regulation dispatch into the energy market
+        phi_t_n = sum([bn*(Fr_dist.loc[bn,'RAISE']*Reg_Rt[i] - Fr_dist.loc[bn,'LOWER'])*(enRRP[i] - hurdle) for bn in Fr_dist.index])
+
+        phi_t.append(phi_t_n + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i] + (dt[i] - ct[i])*enRRP[i] - dt[i]*hurdle)
+
+    # m += st[0] == st0, 'initial_condition'
     
     #########################################
     ############## Objective ################
     #########################################
-    # This first, commented-out constraint includes the revenue from FCAS Reg, which are never guaranteed. So we should definitely not optimise for it (even though we do consider it in
-    # our energy balance)
-    # m.objective = xsum(rMax*(enRRP[i]*(dt[i] + regDt[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for i in range(n))
 
-    # breakpoint()
-
-    m.objective = xsum(
-            (
-            sum(
-                [regDict[regDis]*(enRRP[i]*(dt[i] + regDis_i[i]) + Reg_Rt[i]*regRaiseRRP[i] + Reg_Lt[i]*regLowerRRP[i] + Cont_Rt[i]*contRaiseRRP[i] + Cont_Lt[i]*contLowerRRP[i]) for regDis,regDis_i in regDtDist.items()]
-                )
-            ) for i in range(n)
-        )
+    m.objective = xsum(phi_t)
     
     #########################################
     ############## Optimise #################
@@ -963,13 +894,21 @@ def BESS_COINOR_hurdle(
 
     results = pd.DataFrame(index=rrp.index)
     # res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
-    res_dict = {'Energy_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'REGRAISE_MW':Reg_Rt,'REGLOWER_MW':Reg_Lt,'CONTRAISE_MW':Cont_Rt,'CONTLOWER_MW':Cont_Lt}
+    res_dict = {'dt_MW':dt,'ct_MW':ct,'regDt_MW':regDt,'regCt_MW':regCt,'st_MWh':st,'REGRAISE_MW':Reg_Rt,'REGLOWER_MW':Reg_Lt,'CONTRAISE_MW':Cont_Rt,'CONTLOWER_MW':Cont_Lt}
     res_dataDict = {}
     for key,var in res_dict.items():
         myVar = [v.x for v in var]
         res_dataDict[key] = myVar
     
     results = pd.DataFrame(res_dataDict,index=rrp.index)*rMax
+
+    # Combine the charge and discharge results for more intuitive plotting 
+    results['dt_MW'] = results['dt_MW'] - results['ct_MW']
+    results['regDt_MW'] = results['regDt_MW'] - results['regCt_MW']
+
+    # Calculate the net energy dispatch
+    results['Energy_MW'] = results['dt_MW'] + results['regDt_MW']
+
     # results = pd.concat([rMax*results,rrp],axis=1)
     
     # Splits the profit out by raise/lower Reg/Cont markets
@@ -996,89 +935,7 @@ def BESS_COINOR_hurdle(
 
     return results
 
-# def horizonDispatch(RRP,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,debug=True):
-#     """
-#     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
-#     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
-    
-#     Args:
-#         RRP (pandas Series): Index must be DatetimeIndex. Should correspond to a static price forecast in $/MWh.
-        
-#         freq (int): Frequency of RRP in minutes.
-        
-#         tFcst (int): Length of the slice of the price forecast you want to pass to the optimiser in HOURS.
-        
-#         tInt (int): Length of the interval over which you want to implement the optimised operations before seeing
-#             the next section of the forecast in MINUTES.
-            
-#         sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
-        
-#         st0 (float. Default=2): Starting capacity of your BESS in hours.
-        
-#         eta (float. Default=0.8): Round-trip efficiency of your BESS.
-        
-#         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
-#             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
-            
-#         debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
-        
-#     Functions used:
-#         analysis_functions:
-#             - BESS_COINOR()
-    
-#     Returns:
-#         results (pandas DataFrame): Columns are as for BESS_COINOR, but with "DailyProfit_$" added as a column. Results
-#             are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
-#             forecast horizon but which did not come to fruition.
-    
-#     Use this function to experiment with different BESS sizes/specs and forecast horizons and intervals. Works best with a predefined
-#     forecast, rather than one that changes every interval. Future implementations could allow a dictionary of forecasts to be passed,
-#     and looked up for a given time-stamp.
-    
-#     Created on 16/04/2020 by Bennett Schneider
-    
-#     """
-#     RESULTS = []
-#     numInts = 60/freq # number of intervals in an hour
-#     # for i in range(0,int(days*24*60/tInt)):
-#     for i in range(0,int(freq*(len(RRP))/tInt)):
-              
-#         start = int(numInts*i*tInt/60) # define start of the interval
-#         end = int(numInts*(i*tInt/60+tFcst)) # define end of the interval
-        
-#         if i > 0:
-#             start -= 1 # go back one time-step so we get an overlap of the initial conditions
-        
-#         rrp_series = RRP.iloc[start:end]
-
-#         if debug:
-#             print(f"Running BESS COIN OR between {rrp_series.index[0]} and {rrp_series.index[-1]}")
-        
-#         results = BESS_COINOR(rrp_series,freq=freq,sMax=sMax,st0=st0,eta=eta,write=False,debug=True)
-
-#         results = results[:int(numInts*tInt/60)] # restrict results to those of a single dispatch interval (not the forecast length)
-        
-#         if i > 0 :
-#             results = results[1:] # remove the first element because it's a duplicate
-        
-#         st0 = results['st_MWh'].iloc[-1] # the last state of charge is now the initial condition for the next interval
-        
-#         RESULTS.append(results)
-    
-#     results = pd.concat(RESULTS)
-    
-#     # add a column for daily profit
-#     td = pd.Timedelta(minutes=freq)
-#     profit = results['Profit_$'].copy()
-#     profit.index = profit.index - td
-#     profit = profit.resample('d',loffset=td).sum() 
-#     profit = profit.reindex(results.index,method='ffill')
-#     results['DailyProfit_$'] = profit
-    
-#     return results
-
-
-def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_mod=None):
+def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None,rMax=1,debug=True,**kwargs):
     """
     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
@@ -1095,26 +952,25 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
         
         tInt (int): Length of the interval over which you want to implement the optimised operations before seeing
             the next section of the forecast in MINUTES.
-            
-        sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
         
-        st0 (float. Default=2): Starting capacity of your BESS in hours.
-        
-        eta (float. Default=0.8): Round-trip efficiency of your BESS.
-        
-        rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
-            This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+        optfunc (function. Default=BESS_COINOR_hurdle): Any valid bess optimiser where the first two required arguments are rrp_frame and m
+            and which has an optional argments rrp_mod, st0, rrp_mod, st0, rMax, debug, and freq.
 
-        regDisFrac (float. Default=0.2): Fraction of enabled FCAS reg that is assumed to be dispatched. More research needed on this value.
-            
-        debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
+        st0 (float. Default=2): Starting capacity of your BESS in hours.
 
         rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating the optimisation, but uses rrp for evaluating actual revenue.
+
+        debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
+
+        rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
+            This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+            
+        **kwargs (inputs): Any optional inputs from optfunc() except rrp_mod, st0, rMax, debug, and freq
         
     Functions used:
         analysis_functions:
-            - BESS_COINOR()
-    
+            - BESS_COINOR() (default)
+
     Returns:
         results (pandas DataFrame): Columns are as for BESS_COINOR, but with "DailyProfit_$" added as a column. Results
             are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
@@ -1149,17 +1005,13 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
             rrp_frame_mod = rrp_mod.iloc[start:end]
         else:
             rrp_frame_mod = None
-
+        
         if debug:
-            print(f"Running BESS COIN OR between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
+            print(f"Running {optfunc.__name__} between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
 
-        # write = rf"C:\Users\bennett.schneider\OneDrive - Australian National University\Master of Energy Change\SCNC8021\Analysis\FCAS\debug\{rrp_series.index[0].strftime('%Y%m%d')}.lp"
-        results = BESS_COINOR(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_mod=rrp_frame_mod)
-        # print(results)
-        # breakpoint()
-
+        results = optfunc(rrp_frame,m,freq=freq,rrp_mod=rrp_frame_mod,st0=st0,debug=debug,rMax=rMax,**kwargs)
+  
         m.clear()
-
         
         if i > 0 :
             results = results[:int(numInts*tInt/60)+1]
@@ -1169,8 +1021,6 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
 
         # print(results)
         # breakpoint()
-
-        
         st0 = results['st_MWh'].iloc[-1]/rMax # the last state of charge is now the initial condition for the next interval
         
         RESULTS.append(results)
@@ -1184,7 +1034,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
     # Split results into two categories
     opsCols = ['dt_MW','regDt_MW','st_MWh'] 
     revCols = [col for col in results if col not in opsCols]
-    operations = results.copy()[opsCols]
+    operations = results.copy()[[col for col in opsCols if col in list(results.columns)]]
     revenue = results.copy()[revCols]
 
     # stack the revenue table
@@ -1209,17 +1059,152 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac
     revenue = revenue.stack().reset_index().rename({'level_1':'Market',0:'Revenue_$'},axis=1).set_index([indexName,'Market'])
     # Concatenate horizontally and set Timestamp as the sole index
     revenue = pd.concat([revenue,dispatch],axis=1).reset_index().set_index(indexName)
-
-    # # add a column for daily profit
-    # td = pd.Timedelta(minutes=freq)
-    # for col in RRP.columns:
-    #     profit = results[f'{col}_Profit_$'].copy()
-    #     profit.index = profit.index - td
-    #     profit = profit.resample('d',loffset=td).sum() 
-    #     profit = profit.reindex(results.index,method='ffill')
-    #     results[f'{col}_DailyProfit_$'] = profit
     
     return revenue,operations
+
+
+# def horizonDispatch(RRP,m,freq,tFcst,tInt,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict={1:0.2},debug=True,rrp_mod=None):
+#     """
+#     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
+#     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
+    
+#     Args:
+#         RRP (pandas DataFrame): Index must be DatetimeIndex. Should correspond to a static price forecast of the energy market in $/MWh
+#             and to each of the FCAS markets in $/MW/h.
+        
+#         m (MIP model): Empty model with sense 'MAX'.
+        
+#         freq (int): Frequency of RRP in minutes.
+        
+#         tFcst (int): Length of the slice of the price forecast you want to pass to the optimiser in HOURS.
+        
+#         tInt (int): Length of the interval over which you want to implement the optimised operations before seeing
+#             the next section of the forecast in MINUTES.
+            
+#         sMax (float. Default=4): Maximum useable storage capacity of your BESS in hours.
+        
+#         st0 (float. Default=2): Starting capacity of your BESS in hours.
+        
+#         eta (float. Default=0.8): Round-trip efficiency of your BESS.
+        
+#         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
+#             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
+
+#         regDisFrac (float. Default=0.2): Fraction of enabled FCAS reg that is assumed to be dispatched. More research needed on this value.
+            
+#         debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
+
+#         rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating the optimisation, but uses rrp for evaluating actual revenue.
+        
+#     Functions used:
+#         analysis_functions:
+#             - BESS_COINOR()
+    
+#     Returns:
+#         results (pandas DataFrame): Columns are as for BESS_COINOR, but with "DailyProfit_$" added as a column. Results
+#             are only given for the actioned dispatches according to the set interval, not for dispatches that were optimised over the 
+#             forecast horizon but which did not come to fruition.
+    
+#     Use this function to experiment with different BESS sizes/specs and forecast horizons and intervals. Works best with a predefined
+#     forecast, rather than one that changes every interval. Future implementations could allow a dictionary of forecasts to be passed,
+#     and looked up for a given time-stamp.
+    
+#     Created on 16/04/2020 by Bennett Schneider
+    
+#     """
+#     RESULTS = []
+#     numInts = 60/freq # number of intervals in an hour
+#     # for i in range(0,int(days*24*60/tInt)):
+
+#     for i in range(0,int(freq*(len(RRP))/tInt)):
+#         # breakpoint()
+#         start = int(numInts*i*tInt/60) # define start of the interval
+#         end = int(numInts*(i*tInt/60+tFcst)) # define end of the interval
+        
+#         if i > 0:
+#             start -= 1 # go back one time-step so we get an overlap of the initial conditions
+        
+#         rrp_frame = RRP.iloc[start:end]
+        
+#         # Note for future (as of 14/2/21):
+#         # Use rrp_frame.index[0] and rrp_frame.index[-1] to 
+#         # determine the time slice for rrp_mod, which must be compatible 
+#         # with a forecasted dataset
+#         if type(rrp_mod) == pd.core.frame.DataFrame:
+#             rrp_frame_mod = rrp_mod.iloc[start:end]
+#         else:
+#             rrp_frame_mod = None
+
+#         if debug:
+#             print(f"Running BESS COIN OR between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
+
+#         # write = rf"C:\Users\bennett.schneider\OneDrive - Australian National University\Master of Energy Change\SCNC8021\Analysis\FCAS\debug\{rrp_series.index[0].strftime('%Y%m%d')}.lp"
+#         results = BESS_COINOR(rrp_frame,m,freq=freq,sMax=sMax,st0=st0,eta=eta,rMax=rMax,regDisFrac=regDisFrac,regDict=regDict,write=False,debug=True,rrp_mod=rrp_frame_mod)
+#         # print(results)
+#         # breakpoint()
+
+#         m.clear()
+
+        
+#         if i > 0 :
+#             results = results[:int(numInts*tInt/60)+1]
+#             results = results[1:] # remove the first element because it's a duplicate
+#         else:
+#             results = results[:int(numInts*tInt/60)] # restrict results to those of a single dispatch interval (not the forecast length)
+
+#         # print(results)
+#         # breakpoint()
+
+        
+#         st0 = results['st_MWh'].iloc[-1]/rMax # the last state of charge is now the initial condition for the next interval
+        
+#         RESULTS.append(results)
+    
+#     # concatenate all the results together
+#     results = pd.concat(RESULTS)
+
+#     # save the index name for later (should be 'Timestamp')
+#     indexName = results.index.name
+
+#     # Split results into two categories
+#     opsCols = ['dt_MW','regDt_MW','st_MWh'] 
+#     revCols = [col for col in results if col not in opsCols]
+#     operations = results.copy()[opsCols]
+#     revenue = results.copy()[revCols]
+
+#     # stack the revenue table
+#     # split into dispatch and revenue
+#     dispatch = revenue[[col for col in revenue if 'MW' in col]]
+#     revenue = revenue[[col for col in revenue if '$' in col]]
+
+#     # remove the identifiers from the columns
+#     dispatch.columns = [col.split('_')[0] for col in dispatch]
+#     revenue.columns = [col.split('_')[0].replace('RRP','') for col in revenue]
+
+#     # modify dispatch so we can map back 1:1 to the original markets
+#     for rl in ['RAISE','LOWER']:
+#         origCol = 'CONT' + rl
+#         for market in ['6SEC','60SEC','5MIN']:
+#             col = rl + market
+#             dispatch[col] = dispatch[origCol] # we dispatch the same in all lower and raise markets
+#         dispatch.drop(origCol,axis=1,inplace=True) # drop the aggregated cont columns
+
+#     # stack the dataframes and modify the new column names
+#     dispatch = dispatch.stack().reset_index().rename({'level_1':'Market',0:'Dispatch_MW'},axis=1).set_index([indexName,'Market'])
+#     revenue = revenue.stack().reset_index().rename({'level_1':'Market',0:'Revenue_$'},axis=1).set_index([indexName,'Market'])
+#     # Concatenate horizontally and set Timestamp as the sole index
+#     revenue = pd.concat([revenue,dispatch],axis=1).reset_index().set_index(indexName)
+
+#     # # add a column for daily profit
+#     # td = pd.Timedelta(minutes=freq)
+#     # for col in RRP.columns:
+#     #     profit = results[f'{col}_Profit_$'].copy()
+#     #     profit.index = profit.index - td
+#     #     profit = profit.resample('d',loffset=td).sum() 
+#     #     profit = profit.reindex(results.index,method='ffill')
+#     #     results[f'{col}_DailyProfit_$'] = profit
+    
+#     return revenue,operations
 
 def dailyPriceBands(Region,metaVal,priceBands,sMax,freq=5,mode='quarterly'):
     """

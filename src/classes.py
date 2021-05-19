@@ -424,6 +424,7 @@ class BESS(Gen):
         Same as parent __init__() but adds Smax as an attribute and also to settings.
 
         """
+        
         super(BESS,self).__init__(path,region,Di=Di,Fh=Fh,Fr=Fr,freq=freq,scenario=scenario,modFunc=modFunc,**kwargs)
         self.Smax = Smax
         self.settings.update(
@@ -434,7 +435,7 @@ class BESS(Gen):
         self.results = pd.DataFrame()
         self.operations = pd.DataFrame()
 
-    def optDispatch(self,Network,m,t0,t1,debug=False):
+    def optDispatch(self,Network,m,t0,t1,optfunc=BESS_COINOR,**kwargs):
         """
         Uses the metadata stored in the caller to set the inputs for horizonDispatch, which optimises the BESS based on
         RRP, where RRP contains both the original and
@@ -463,7 +464,7 @@ class BESS(Gen):
             Fh = self.Fh # otherwise, interpret as number of hours
             
 
-        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,regDisFrac=self.Fr,regDict=self.Fr_w,debug=debug,rrp_mod=rrp_mod)
+        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=optfunc,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,rrp_mod=rrp_mod,**kwargs)
 
         self.revenue = self.results.append(revenue)
         self.operations = self.operations.append(operations)

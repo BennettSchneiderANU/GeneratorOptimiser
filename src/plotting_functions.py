@@ -241,21 +241,22 @@ def plotlyPivot(
         elif relative:
             fig.update_layout(barmode='relative')
     
-    for d in figure.data:
-        col = d.name
-        try:
-            name = labels[col]
-        except KeyError:
-            name = col
-            
-        if col in secondary_y:
-            sy = True
-        else:
-            sy = False
-            
-        fig.add_trace(d,
-            secondary_y = sy
-            )
+    if figure:
+        for d in figure.data:
+            col = d.name
+            try:
+                name = labels[col]
+            except KeyError:
+                name = col
+                
+            if col in secondary_y:
+                sy = True
+            else:
+                sy = False
+                
+            fig.add_trace(d,
+                secondary_y = sy
+                )
 
     
     
