@@ -419,7 +419,7 @@ class Gen(object):
         return rrp,rrp_mod
 
 class BESS(Gen):
-    def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,freq=30,scenario='RRP',Smax=2,modFunc=None,**kwargs):
+    def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,freq=30,scenario='RRP',Smax=2,eta=1,modFunc=None,**kwargs):
         """
         Same as parent __init__() but adds Smax as an attribute and also to settings.
 
@@ -427,6 +427,7 @@ class BESS(Gen):
         
         super(BESS,self).__init__(path,region,Di=Di,Fh=Fh,Fr=Fr,freq=freq,scenario=scenario,modFunc=modFunc,**kwargs)
         self.Smax = Smax
+        self.eta = eta
         self.settings.update(
             {
                 'Smax':Smax
@@ -464,7 +465,7 @@ class BESS(Gen):
             Fh = self.Fh # otherwise, interpret as number of hours
             
 
-        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=optfunc,sMax=self.Smax,st0=self.Smax/2,eta=1,rMax=1,rrp_mod=rrp_mod,**kwargs)
+        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=optfunc,sMax=self.Smax,st0=self.Smax/2,eta=self.eta,rMax=1,rrp_mod=rrp_mod,**kwargs)
 
         self.revenue = self.results.append(revenue)
         self.operations = self.operations.append(operations)

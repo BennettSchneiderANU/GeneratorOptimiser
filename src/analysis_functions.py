@@ -478,7 +478,7 @@ def BESS_COINOR(rrp,m,freq=30,sMax=4,st0=2,eta=0.8,rMax=1,regDisFrac=0.2,regDict
     upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
 
 
-    if type(rrp_mod) == pd.core.frame.DataFrame:
+    if (type(rrp_mod) == pd.core.frame.DataFrame) and (len(rrp_mod) > 0):
         optRRP = rrp_mod.copy()
     else:
         optRRP = rrp.copy()
@@ -682,13 +682,11 @@ def BESS_COINOR_hurdle(
     write=False,
     debug=True,
     rrp_mod=None,
-    trapezium={
-        "maxAvail": 2,                  # Effective RReg FCAS MaxAvail 
-        "enablementMax": 1,             # Enablement Max. Assume same for all FCAS
-        "enablementMin": -1,            # Enablement Min. Assume same for all FCAS
-        "lowBreakpoint": 1,             # Low breakpoint
-        "highBreakpoint": -1            # High breakpoint
-    }
+    maxAvail= 2,                  # Effective RReg FCAS MaxAvail 
+    enablementMax = 1,             # Enablement Max. Assume same for all FCAS
+    enablementMin = -1,            # Enablement Min. Assume same for all FCAS
+    lowBreakpoint = 1,             # Low breakpoint
+    highBreakpoint = -1            # High breakpoint
     ):
     """
     Uses the mip COIN-OR linear solver to perform a linear optimisation of a battery energy storage system (BESS)
@@ -745,11 +743,6 @@ def BESS_COINOR_hurdle(
     """
 
     # Define the key constraining constants based on rmax
-    maxAvail = trapezium["maxAvail"]                       # Effective RReg FCAS MaxAvail
-    enablementMax = trapezium["enablementMax"]             # Enablement Max. Assume same for all FCAS
-    enablementMin = trapezium["enablementMin"]             # Enablement Min. Assume same for all FCAS
-    lowBreakpoint = trapezium["lowBreakpoint"]             # Low breakpoint
-    highBreakpoint = trapezium["highBreakpoint"]           # High breakpoint
     lowerSlope = (lowBreakpoint - enablementMin)/maxAvail  # Upper/Lower Slope Coeff
     upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
 
