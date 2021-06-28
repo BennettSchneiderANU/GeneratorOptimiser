@@ -11,6 +11,8 @@ import plotly.express as px
 from plotly.offline import plot
 from mip import *
 import time
+go.SetLogging(path = '', level = 'DEBUG')
+
 #%% Initialise
 path_base = r"C:\Users\benne\OneDrive - Australian National University\Master of Energy Change\SCNC8021\packaging_working"
 t0 = dt.datetime(2020,1,1)
@@ -27,12 +29,22 @@ RRP.index.name = 'Timestamp'
 #%% Create price input and run optimiser
 # load modified rrp into nem
 nem.loadRaw(RRP, 5, 'Price')
+#%% New version
+bess1 = go.BESS(path,region,'bess1')
+#%%
+bess2 = go.BESS(path,region,'bess2')
+m = Model(sense='MAX')
+#%%
+bess2.optDispatch(nem, m,t0,t1)
+
 #%%
 bess1 = go.BESS(path,region,scenario='Energy',modFunc=None)
 bess2 = go.BESS(path,region,scenario='Energy',modFunc=None)
+bess3 = go.BESS(path,region,scenario='Energy',modFunc=None,eta=0.9)
 #%% Clear bess objects so they can be remade
-bess1 = None
-bess2 = None
+del bess1
+del bess2
+del bess3
 # nem.procPrice(30, region, t0, t1,pivot=True,modFunc=bess1.modFunc,**bess1.kwargs)
 # rrp,rrp_mod = bess1.getRRP(nem,t0,t1)
 #%%
@@ -40,8 +52,11 @@ m = Model(sense='MAX')
 # run optimised dispatch usinf preload
 bess1.optDispatch(nem, m, t0, t1,debug=True,optfunc=go.BESS_COINOR)
 bess2.optDispatch(nem, m, t0, t1,debug=True,optfunc=go.BESS_COINOR_hurdle,hurdle=20)
+bess3.optDispatch(nem, m, t0, t1,debug=True,optfunc=go.BESS_COINOR_hurdle,hurdle=20)
 revenue1 = bess1.stackRevenue()
 revenue2 = bess2.stackRevenue()
+revenue3 = bess3.stackRevenue()
+
 #%%
 figure1 = px.line(revenue1,x='Timestamp',y='Value',color='Market',facet_row='Result').update_yaxes(matches=None)
 plot(figure1)
@@ -53,6 +68,11 @@ plot(figure2)
 time.sleep(1)
 go.plotlyPivot(bess2.operations.sort_index())
 
+#%%
+figure3 = px.line(revenue3,x='Timestamp',y='Value',color='Market',facet_row='Result').update_yaxes(matches=None)
+plot(figure3)
+time.sleep(1)
+go.plotlyPivot(bess3.operations.sort_index())
 #%%
 figure = px.line(revenue,x='Timestamp',y='Value',color='Market',line_dash='Result')
 # plot(figure)

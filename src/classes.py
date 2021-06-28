@@ -154,7 +154,7 @@ class NEM(Network):
         return RRP
 
 class Gen(object):
-    def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
+    def __init__(self,path,region, name,version=''): # Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
         """
         Initialises a Gen object.
 
@@ -163,32 +163,23 @@ class Gen(object):
 
             region (str): Name of the pricing region of the network you want to model.
 
-            Di (float, int, or str. Default='/4'): The dispatch interval. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of 
-                timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval.
+            name (str): Name of the generator. Must match a column in configs/inputs.csv.
 
-            Fh (float or int. Default='/4'): The forecast horizon. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of 
-                timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval.
-
-            Fr (float. Default=0.2): The regulation dispatch fraction applied to the optimised dispatch. Must be < 1. 
-
-            Fr_w (dict of floats. Default=None): Values are Fr applied to the optimiser when deciding dispatch. Keys are the weights the optimiser 
-                asssigns to the respective Fr. If None, equal to {1:Fr}, i.e. the optimiser receives the same setting as is applied to the optimised
-                dispatch, with unity weighting.
-
-            freq (float. Default=30): Frequency of the expected input in minutes.
-
-            scenario (str. Default='RRP'): Choose a scenario from the list of scenarios embedded in this function. Must match one of the keys which 
-                corresponds to a set of markets across which the object will be optimised.
-
-            modFunc (function. Default=None): Any function whose first input is a pandas dataframe representing a price time-series you want to modify.
-
-            **kwargs (inputs): The remaining inputs for modFunc. If modFunc needs freq, this will be passed without requiring input from kwargs.
+            version (str. Default=''): If you have a different version of the input file, it must be placed in the configs folder in the repo and named
+                inputs_[version].csv
 
         Adds to self as attribute:
             As above
 
-            settings (dict of various): Keys are strings matching the attribute names. Values are the subset of the attributes of self that may be used for
-                constructing a unique file name or generating a unique stackable dataframe. 
+            config (pandas DataFrame): See self.loadConfig()
+            
+            Each of the variables in the 'Input' column of inputs.csv will be set as an attribute of self. See self.loadConfig()
+
+            markets (list of strs): Based on the value of scenario. 
+
+            results (pandas DataFrame): Empty dataframe for storing dispatch results.
+
+            results (pandas DataFrame): Empty dataframe for storing operational dispatch results.
 
         Use this function to initialise a Gen class instance.
 
@@ -208,30 +199,75 @@ class Gen(object):
 
         self.path = path
         self.region = region
-        self.Di = Di
-        self.Fh = Fh
-        self.Fr = Fr
+        self.name = name
+        self.version = version
+
+        self.loadConfig(version=version)
 
         # If no weighting set, just apply full weighting on Fr
-        if Fr_w:
-            self.Fr_w = Fr_w
+        if self.RFr:
+            self.RFr = self.RFr
         else:
-            self.Fr_w = {Fr:1}
+            self.RFr = {self.RFr:1}
 
-        self.freq = freq
-        self.scenario = scenario
-        self.markets = scenarios[scenario]
+        if self.LFr:
+            self.LFr = self.LFr
+        else:
+            self.LFr = {self.LFr:1}
 
-        self.settings = {
-            'region':self.region,
-            'Di':self.Di,
-            'Fh':self.Fh,
-            'Fr':self.Fr,
-            'scenario':self.scenario
-        }
+        # Lookup markets
+        self.markets = scenarios[self.scenario]
+        
+        # For storing dispatch results
+        self.results = pd.DataFrame()
+        self.operations = pd.DataFrame()
+        
+        # ModFunc should be reset to None if nan and to a function otherwise
+        breakpoint()
+        try:
+            if np.isnan(self.modFunc):
+                self.modFunc = None
+        except TypeError:
+            self.modFunc = eval(self.modFunc)
 
-        self.modFunc = modFunc
-        self.kwargs = kwargs
+        # Convert to function object
+        if self.optfunc:
+            self.optfunc = eval(self.optfunc)
+
+    def loadConfig(self,version=''):
+        """
+        Reads the master input config containing all settings. Sets the variable in each line as an attribute of self. Uses the value entered under self.name,
+        but will fill values not entered with the default settings.
+
+        Args:
+            self (Generator):
+              - name (str): Name of the generator.
+            
+            version (str. Default=''): If you have a different version of the input file, it must be placed in the configs folder in the repo and named
+                inputs_[version].csv
+
+        Adds to self as attribute:
+            config (pandas DataFrame): The following columns of input.csv: 'Input','Object','Default',self.name
+
+            Input (attributes): Each of the variables in the 'Input' column of inputs.csv will be set as an attribute of self.
+
+        Use this function to conveniently define a generator object based on a myriad of inputs. This function is called in Generator.__init__().
+
+        Created on 26/06/2021 by Bennett Schneider
+
+        """
+        config_path = os.path.join(os.path.dirname(os.path.dirname((__file__))),'configs','inputs' + version + '.csv') # construct path
+        config = pd.read_csv(config_path,index_col=0)[['Object','Default',self.name]] # read in the config data as a pandas df
+        config['values'] = config[self.name].fillna(config['Default']) # if nan, fill with default values
+        self.config = config # assign to self
+        
+        # Set these inputs as attributes
+        for i,val in self.config['values'].to_dict().items():
+            try:
+                val = float(val)
+            except ValueError:
+                pass
+            setattr(self,i,val)   
 
     def pickle(self,nowStr="%Y%m%d",selfStr="%Y%m%d",comment=None):
         """
@@ -385,14 +421,20 @@ class Gen(object):
 
         except IndexError as e:
             if self.modFunc:
+                # Get the kwargs for optfunc to be passed through horizonDispatch
+                kwargs = self.extractKwargs(Network.procPrice,self.modFunc)
                 # Create our input data and store it in a network object
-                RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**self.kwargs)
+                RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**kwargs)
                 rrp = RRP[RRP['modFunc'] == 'Orig']
                 rrp_mod = RRP[RRP['modFunc'] != 'Orig']
             else:
                 errFunc(e)
         except KeyError as e:
-            RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**self.kwargs)
+            if self.modFunc:
+                kwargs = self.extractKwargs(Network.procPrice,self.modFunc)
+            else:
+                kwargs = {}
+            RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**kwargs)
             rrp = RRP[RRP['modFunc'] == 'Orig']
             rrp_mod = RRP[RRP['modFunc'] != 'Orig']
     
@@ -418,25 +460,53 @@ class Gen(object):
 
         return rrp,rrp_mod
 
-class BESS(Gen):
-    def __init__(self,path,region,Di='/4',Fh='/4',Fr=0.2,freq=30,scenario='RRP',Smax=2,eta=1,modFunc=None,**kwargs):
+    def extractKwargs(self,caller,called):
         """
-        Same as parent __init__() but adds Smax as an attribute and also to settings.
+        Extracts the kwargs inputs from self such that it can be passed to the called function as a **kwargs argument through the caller
+        without duplicating inputs, e.g. caller(input1, input2,...,inputi,**kwargs) -> called(inputi,**kwargs).
+        Attributes of self must match the names of the inputs such that they can be extracted with getattr(self,"inputi") = self.inputi.
 
+        Args:
+            self (Generator):
+              - name (str): Name of the generator.
+              - All names if the inputs of called that are not already arguments of caller.
+
+            caller (func): Any function.
+
+            called (func): Any function.
+
+        Returns:
+            kwargs (dict of inputs): Keys are the names of the inputs as strings. Values are the values of those inputs.
+
+        Use this function to construct a valid kwargs dictionary for a given function called inside another function, which may share inputs.
+
+        Created on 28/06/2021 by Bennett Schneider
+            
+        """
+
+        caller_inputs = inspect.getfullargspec(caller).args
+        called_inputs = inspect.getfullargspec(called).args
+
+        # pull kwargs out of the attributes of self that match the optional arguments of optfunc if they are not already used in horizon dispatch
+        kwargs = {}
+        for i in called_inputs:
+            if i not in caller_inputs:
+                try:
+                    kwargs[i] = getattr(self,i)
+                except AttributeError:
+                    logging.debug(f" {i} is missing from {self.name} object. Using default value")
+
+        return kwargs
+
+class BESS(Gen):
+    def __init__(self,path,region,name):
+        """
+        Same as parent __init__().
         """
         
-        super(BESS,self).__init__(path,region,Di=Di,Fh=Fh,Fr=Fr,freq=freq,scenario=scenario,modFunc=modFunc,**kwargs)
-        self.Smax = Smax
-        self.eta = eta
-        self.settings.update(
-            {
-                'Smax':Smax
-            }
-        )
-        self.results = pd.DataFrame()
-        self.operations = pd.DataFrame()
+        super(BESS,self).__init__(path,region,name)
 
-    def optDispatch(self,Network,m,t0,t1,optfunc=BESS_COINOR,**kwargs):
+    def optDispatch(self,Network,m,t0,t1): # ,optfunc=BESS_COINOR,**kwargs):
         """
         Uses the metadata stored in the caller to set the inputs for horizonDispatch, which optimises the BESS based on
         RRP, where RRP contains both the original and
@@ -463,9 +533,11 @@ class BESS(Gen):
             Fh *= self.freq/60 # convert from number of intervals to hours
         else:
             Fh = self.Fh # otherwise, interpret as number of hours
-            
+        
+        # Get the kwargs for optfunc to be passed through horizonDispatch
+        kwargs = self.extractKwargs(horizonDispatch,self.optfunc)
 
-        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=optfunc,sMax=self.Smax,st0=self.Smax/2,eta=self.eta,rMax=1,rrp_mod=rrp_mod,**kwargs)
+        revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=self.optfunc,st0=self.sMax/2,rMax=1,rrp_mod=rrp_mod,**kwargs)
 
         self.revenue = self.results.append(revenue)
         self.operations = self.operations.append(operations)
@@ -479,3 +551,5 @@ class BESS(Gen):
         if setIndex:
             revenue.set_index(name,inplace=True)
         return revenue
+
+    

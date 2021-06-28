@@ -680,7 +680,6 @@ def BESS_COINOR_hurdle(
     eta=0.8,
     rMax=1,
     write=False,
-    debug=True,
     rrp_mod=None,
     maxAvail= 2,                  # Effective RReg FCAS MaxAvail 
     enablementMax = 1,             # Enablement Max. Assume same for all FCAS
@@ -722,8 +721,6 @@ def BESS_COINOR_hurdle(
         
         write (bool or str. Default=False): If False, does nothing. Otherwise, should be a string with a file path ending in lp.
             This will let the function write the results of the optimisation to that location in lp format.
-            
-        debug (bool. Default=True): If True, prints out messages that are useful for debugging. 
 
         rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for running the optimisation instead of rrp, but use rrp
             to evaluate the revenue.
@@ -870,8 +867,7 @@ def BESS_COINOR_hurdle(
     ############## Optimise #################
     #########################################
     m.optimize()
-    if debug:
-        print(f'status: {m.status} \nprofit {m.objective_value}')
+    logging.debug(f' status: {m.status} \nprofit {m.objective_value}')
     
     if write:
         m.write(write)
@@ -928,7 +924,7 @@ def BESS_COINOR_hurdle(
 
     return results
 
-def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None,rMax=1,debug=True,**kwargs):
+def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None,rMax=1,**kwargs):
     """
     A wrapper around BESS_COINOR that runs a moving forecast window of width tFcst in hours at intervals
     of tInt. E.g. 2-day forecast updated and optimised on every 30min interval.
@@ -952,8 +948,6 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
         st0 (float. Default=2): Starting capacity of your BESS in hours.
 
         rrp_mod (pandas DataFrame. Default=None): If a pandas dataframe is entered here, uses this for evaluating the optimisation, but uses rrp for evaluating actual revenue.
-
-        debug (bool. Default=True): If True, prints out messages from BESS_COINOR that are useful for debugging. 
 
         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
@@ -999,10 +993,9 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
         else:
             rrp_frame_mod = None
         
-        if debug:
-            print(f"Running {optfunc.__name__} between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
+        logging.debug(f" Running {optfunc.__name__} between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
 
-        results = optfunc(rrp_frame,m,freq=freq,rrp_mod=rrp_frame_mod,st0=st0,debug=debug,rMax=rMax,**kwargs)
+        results = optfunc(rrp_frame,m,freq=freq,rrp_mod=rrp_frame_mod,st0=st0,rMax=rMax,**kwargs)
   
         m.clear()
         
@@ -1524,7 +1517,7 @@ def dictFilt(df,selectDict):
     return df_filt
 
 # def thresh_smooth(rdata,freq,window,thresh,col,roll=False):
-def thresh_smooth(data,freq,window,thresh,roll=False):
+def thresh_smooth(data,freq,window=4,thresh=50,roll=False):
     """
     Implements a smoothing function that sets the value of data to the average value across a rolling 
     window if the differential across that rolling window is < thresh.
