@@ -5,6 +5,9 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import pickle as pkl
+from ipywidgets import widgets
+
+from pandas.core.frame import DataFrame
 # import opennem
 
 from analysis_functions import *
@@ -223,7 +226,6 @@ class Gen(object):
         self.operations = pd.DataFrame()
         
         # ModFunc should be reset to None if nan and to a function otherwise
-        breakpoint()
         try:
             if np.isnan(self.modFunc):
                 self.modFunc = None
@@ -401,8 +403,11 @@ class Gen(object):
                 # use the logic to slice the data
                 rrp_mod = nPrice[logic & mod_logic]
 
+                # Get the kwargs for optfunc to be passed through horizonDispatch
+                kwargs = self.extractKwargs(Network.procPrice,self.modFunc)
+
                 # iterate through kwargs to get final dataframe
-                for key,val in self.kwargs.items():
+                for key,val in kwargs.items():
                     rrp_mod = rrp_mod[rrp_mod[key] == val] 
 
                 # Raise an error if we don't have the right amount of data
@@ -504,17 +509,50 @@ class BESS(Gen):
         Same as parent __init__().
         """
         
-        super(BESS,self).__init__(path,region,name)
+        super().__init__(path,region,name)
 
     def optDispatch(self,Network,m,t0,t1): # ,optfunc=BESS_COINOR,**kwargs):
         """
-        Uses the metadata stored in the caller to set the inputs for horizonDispatch, which optimises the BESS based on
-        RRP, where RRP contains both the original and
+        Uses the metadata stored in the caller to set the inputs for horizonDispatch and the bess optimiser (optfunc). This will optimise battery dispatch
+        based on RRP. If self.modFunc points to a suitable function, the resulting modified RRP will be stored in Network and used to feed the objective
+        function of the optimiser. The actual RRP will then be used to evaluate the result.
 
         Args:
+            self (BESS): 
+              - freq (int)
+              - Di (str or int)
+              - Fh (str or int)
+              - optfunc (func)
+              - sMax (float)
+              - any additional inputs for optfunc
+
+            Network (Network): See classes.Network.__init__()
+
             t0 (datetime): Starting datetime.
 
             t1 (datetime): Ending datetime. 
+
+        Functions used:
+            classes:
+              - Generator.extractKwargs()
+              - Generator.getRRP()
+            
+            analysis_functions:
+              - horizonDispatch()
+            
+            other:
+              - optfunc()
+              - modFunc()
+        
+        Adds to self as attribute:
+            revenue (pandas DataFrame): The revenue earned in each market due to optimal battery dispatch. Appends to existing if already exists. 
+
+            operations (pandas DataFrame): The operations the battery took in each market to achieve optimal dispatch. Appends to existing if already exists.
+
+        Use this functions to optimally dispatch a battery using a given dispatch function.
+
+        Created on 29/06/2021 by Bennett Schneider
+
         """
 
         # Pull data from Network such that it can be directly optimised based on the caller's preset settings
@@ -542,14 +580,160 @@ class BESS(Gen):
         self.revenue = self.results.append(revenue)
         self.operations = self.operations.append(operations)
 
-    def stackRevenue(self,setIndex=False):
+    def stackRevenue(self,setIndex=False,load=True):
         """
         Fully stacks revenue attribute for plotting convenience.
         """
         name = self.revenue.index.name
-        revenue = self.revenue.copy().reset_index().set_index(['Timestamp','Market']).stack().reset_index().rename({'level_2':'Result',0:'Value'},axis=1)
+        stackedRevenue = self.revenue.copy().reset_index().set_index(['Timestamp','Market']).stack().reset_index().rename({'level_2':'Variable',0:'Value'},axis=1)
         if setIndex:
-            revenue.set_index(name,inplace=True)
-        return revenue
+            stackedRevenue.set_index(name,inplace=True)
+        
+        if load:
+            self.stackedRevenue = stackedRevenue.copy()
+        return stackedRevenue
 
+    def stackOperations(self,setIndex=False,load=True):
+        """
+        Fully stacks operations attribute for plotting convenience.
+        """
+        name = self.operations.index.name
+        stackedOperations = self.operations.copy().stack().reset_index().rename({'level_1':'Variable',0:'Value'},axis=1)
+        if setIndex:
+            stackedOperations.set_index(name,inplace=True)
+        
+        if load:
+            self.stackedOperations = stackedOperations.copy()
+        return stackedOperations
+
+    def plotOutput(self,Network,t0,t1):
+        """
+        """
+        rrp,rrp_mod = self.getRRP(Network,t0,t1)
+
+        
+
+        self.stackRevenue()
+        self.stackOperations()
+
+    def energyRevenuePlot(self,Network,show=True,t0=None,t1=None,kwargs={}):
+        """
+        """
+
+        # Get the revenue table
+        revenue = self.revenue.copy()
+
+        # Filter for energy and pull out the desired column
+        revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
+
+        if t0 and t1:
+            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+
+        else:
+            # Get the price data for the given interval
+            t0 = revenue.index.min()
+            t1 = revenue.index.max()
+
+        rrp,rrp_mod = self.getRRP(Network,t0,t1)
+        
+        # If rrp_mod, combine the two
+        if type(rrp_mod) == pd.core.frame.DataFrame:
+            rrp = rrp['Energy'].to_frame('Energy Price (Actual)')
+            rrp_mod = rrp_mod['Energy'].to_frame('Energy Price (Objective)')
+            RRP = pd.concat([rrp,rrp_mod],axis=1)
+        else:
+            RRP = rrp['Energy'].to_frame('Energy Price')
+
+        # Combine
+        toPlot = pd.concat([RRP,revenue],axis=1)
+
+        fig = plotlyPivot(
+            toPlot,
+            Scatter=['Revenue'],
+            Line=list(RRP.columns),
+            colorList = plotly.colors.qualitative.Pastel,
+            fill={'Revenue':'tozeroy'},
+            secondary_y=['Revenue'],
+            show=show,
+            opacity=0.4,
+            **kwargs,
+            )
+
+        return fig
+
+
+    def energyDispatchPlot(self,show=True,t0=None,t1=None,kwargs={}):
+        """
+        Stacked bar of RegDt_MW and dt_MW
+        Filled scatter of storage level (MWh)
+        """
+
+        # Get the operations table
+        operations = self.operations.copy()
+        operations = operations.rename({'dt_MW':'Energy dispatch','regDt_MW': 'Reg Energy Dispatch','st_MWh': 'State of Charge'},axis=1)
+        operations = operations[[col for col in operations.columns if operations[col].abs().sum() > 1]] # filter out empty columns
+
+        if t0 and t1:
+            operations = operations[(operations.index > t0) & (operations.index <= t1)]
+
+        fig = plotlyPivot(
+            operations,
+            Scatter=['State of Charge'],
+            Bar=[col for col in operations if 'State of Charge' not in col],
+            relative=True,
+            colorList = {
+                'Bar': plotly.colors.qualitative.Pastel,
+                'Scatter': list(reversed(plotly.colors.qualitative.Pastel))
+            },
+            fill={'State of Charge':'tozeroy'},
+            show=show,
+            opacity=0.4,
+            **kwargs
+            )
+        
+        return fig
+
+    def plotEnergy(self,Network,t0=None,t1=None,dipatch_kwargs={},revenue_kwargs={}):
+        """
+        Needs some work to preserve the formatting of revenue and dispatch figures
+        """
+
+        dispatch = go.FigureWidget(self.energyDispatchPlot(show=False,t0=t0,t1=t1,kwargs=dipatch_kwargs))
+        revenue = go.FigureWidget(self.energyRevenuePlot(Network,show=False,t0=t0,t1=t1,kwargs=revenue_kwargs))
+
+        fig = widgets.VBox([dispatch,revenue])
+
+        # fig = make_subplots(rows=2, cols=1,shared_xaxes=True)
+
+        # for d in dispatch.data:
+        #     fig.add_trace(
+        #         d,
+        #         row=1, col=1
+        #     )
+
+        # for d in revenue.data:
+        #     fig.add_trace(
+        #         d,
+        #         row=2, col=1
+            # )
+
+        return fig
+
+    def regRevenuePlot():
+        """
+        """
     
+    def regDispatchPlot():
+        """
+        """
+    
+
+    def contRevenuePlot():
+        """
+        """
+    
+    def contDispatchPlot():
+        """
+        """
+
+

@@ -1,18 +1,19 @@
-﻿Input,Object,Default,bess1,bess2,Description
-Di,Generator,/4,,,"If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval."
-Fh,Generator,/4,,,"The forecast horizon. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of  timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval."
-freq,Generator,30,,,Frequency of the input signals
-scenario,Generator,Energy,,,Set of markets in which the generator is being dispatched
-modFunc,Generator,,,thresh_smooth,Any function whose first input is a pandas dataframe representing a price time-series you want to modify.
-RFr,Generator,0.2,,,"Raise regulation dispatch fraction (actual, regulation energy revenue-weighted)"
-LFr,Generator,0.2,0.1,,"Lower regulation dispatch fraction (actual, regulation energy revenue-weighted)"
-RFr_dist,Generator,,,,Regulation energy revenue-weighted distribution of Raise regulation dispatch fraction
-LFr_dist,Generator,,,,Regulation energy revenue-weighted distribution of Lower regulation dispatch fraction
-maxAvail,Generator,2,,,FCAS trapezium
-enablementMax,Generator,1,,,FCAS trapezium
-enablementMin,Generator,-1,,,FCAS trapezium
-lowBreakpoint,Generator,1,,,FCAS trapezium
-highBreakpoint,Generator,-1,,,FCAS trapezium
-sMax,BESS,2,,,Energy storage capacity in MWh
-eta,BESS,0.9,,,Round trip efficiency
-optfunc,BESS,BESS_COINOR,,,Function to use for dispatch optimisation
+﻿Input,Object,Default,bess1,bess2,bess3,Description
+Di,Generator,/4,,,,"If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval."
+Fh,Generator,/4,,,,"The forecast horizon. If a str, must be of the form '/{number}'. In this case, Di will be interpreted as the total number of  timestamps divided by {number}. Otherwise, it is interpreted as the number of minutes in the dispatch interval."
+freq,Generator,30,,,,Frequency of the input signals
+scenario,Generator,Energy,,,FCASCoopt,"Set of markets in which the generator is being dispatched: Energy, FCASCoopt, RegCoopt, RegRaiseCoopt, RegLowerCoopt, RegLowerCoopt, ContCoopt, ContRaisCoopt, ContLowerCoopt"
+modFunc,Generator,,,thresh_smooth,,Any function whose first input is a pandas dataframe representing a price time-series you want to modify.
+RFr,Generator,0.2,,,,"Raise regulation dispatch fraction (actual, regulation energy revenue-weighted)"
+LFr,Generator,0.2,0.1,,,"Lower regulation dispatch fraction (actual, regulation energy revenue-weighted)"
+RFr_dist,Generator,,,,,Regulation energy revenue-weighted distribution of Raise regulation dispatch fraction
+LFr_dist,Generator,,,,,Regulation energy revenue-weighted distribution of Lower regulation dispatch fraction
+maxAvail,Generator,2,,,,FCAS trapezium
+enablementMax,Generator,1,,,,FCAS trapezium
+enablementMin,Generator,-1,,,,FCAS trapezium
+lowBreakpoint,Generator,1,,,,FCAS trapezium
+highBreakpoint,Generator,-1,,,,FCAS trapezium
+sMax,BESS,2,,,,Energy storage capacity in MWh
+eta,BESS,0.9,,,,Round trip efficiency
+optfunc,BESS,BESS_COINOR,,,,Function to use for dispatch optimisation
+hurdle,BESS,0,,,30,

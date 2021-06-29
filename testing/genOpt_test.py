@@ -36,6 +36,15 @@ bess2 = go.BESS(path,region,'bess2')
 m = Model(sense='MAX')
 #%%
 bess2.optDispatch(nem, m,t0,t1)
+#%%
+bess1.optDispatch(nem, m,t0,t1)
+#%%
+bess2.stackRevenue()
+#%%
+bess3 = go.BESS(path,region,'bess3')
+bess3.optDispatch(nem, m,t0,t1)
+
+#%%
 
 #%%
 bess1 = go.BESS(path,region,scenario='Energy',modFunc=None)
