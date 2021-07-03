@@ -253,6 +253,8 @@ class Gen(object):
 
             Input (attributes): Each of the variables in the 'Input' column of inputs.csv will be set as an attribute of self.
 
+            marketmeta (pandas DataFrame): Market metdata, principally for constructing robust schema for results.
+
         Use this function to conveniently define a generator object based on a myriad of inputs. This function is called in Generator.__init__().
 
         Created on 26/06/2021 by Bennett Schneider
@@ -270,6 +272,11 @@ class Gen(object):
             except ValueError:
                 pass
             setattr(self,i,val)   
+
+        # read in the market metadata lookup as well
+        marketmeta_path = os.path.join(os.path.dirname(os.path.dirname((__file__))),'configs','marketmeta.csv') # construct path
+        marketmeta = pd.read_csv(marketmeta_path) # read in the markets data as a pandas df
+        self.marketmeta = marketmeta
 
     def pickle(self,nowStr="%Y%m%d",selfStr="%Y%m%d",comment=None):
         """
@@ -686,6 +693,7 @@ class BESS(Gen):
                 'Scatter': list(reversed(plotly.colors.qualitative.Pastel))
             },
             fill={'State of Charge':'tozeroy'},
+            secondary_y=list(operations.columns),
             show=show,
             opacity=0.4,
             **kwargs
@@ -698,10 +706,15 @@ class BESS(Gen):
         Needs some work to preserve the formatting of revenue and dispatch figures
         """
 
-        dispatch = go.FigureWidget(self.energyDispatchPlot(show=False,t0=t0,t1=t1,kwargs=dipatch_kwargs))
-        revenue = go.FigureWidget(self.energyRevenuePlot(Network,show=False,t0=t0,t1=t1,kwargs=revenue_kwargs))
+        # Get the operations table
+        operations = self.operations.copy()
 
-        fig = widgets.VBox([dispatch,revenue])
+        # Get the revenue table
+        revenue = self.revenue.copy()
+
+        # Filter for energy and pull out the desired column
+        revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
+
 
         # fig = make_subplots(rows=2, cols=1,shared_xaxes=True)
 

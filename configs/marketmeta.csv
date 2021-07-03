@@ -1,0 +1,10 @@
+﻿Market,Direction,Category,Scenario
+Energy,Energy,Energy,Energy
+RAISE6SEC,RAISE,Cont,ContRaise
+RAISE60SEC,RAISE,Cont,ContRaise
+RAISE5MIN,RAISE,Cont,ContRaise
+RAISEREG,RAISE,Reg,RegRaise
+LOWER6SEC,LOWER,Cont,ContLower
+LOWER60SEC,LOWER,Cont,ContLower
+LOWER5MIN,LOWER,Cont,ContLower
+LOWERREG,LOWER,Reg,RegLower
