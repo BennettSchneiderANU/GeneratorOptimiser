@@ -7,6 +7,7 @@ Created on Tue Mar 17 20:38:41 2020
 
 import pandas as pd
 import numpy as np
+from error_handling import errFunc
 from scipy import stats,optimize
 import datetime as dt
 from plotting_functions import *
@@ -1611,4 +1612,14 @@ def thresh_flat(dataSlice,thresh,roll):
     # print(dataSlice)
     return dataSlice
 
-# def stackData(data,primaryKeys,valCol,)
+def stackData(data,index=None,values=None,resetindex=False):
+    if resetindex:
+        data = data.copy().reset_index()
+
+    if index:
+        pass
+    elif values:
+        index = [col for col in data.columns if col not in values]
+    
+    data = data.copy().set_index(index).stack().reset_index().rename({f'level_{len(index)}':'Variable',0:'Value'},axis=1)
+    return data

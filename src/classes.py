@@ -613,60 +613,93 @@ class BESS(Gen):
             self.stackedOperations = stackedOperations.copy()
         return stackedOperations
 
-    def plotOutput(self,Network,t0,t1):
-        """
-        """
-        rrp,rrp_mod = self.getRRP(Network,t0,t1)
-
+    def rrpSchema(self,Network,t0=None,t1=None):
+        # Get the price
         
-
-        self.stackRevenue()
-        self.stackOperations()
-
-    def energyRevenuePlot(self,Network,show=True,t0=None,t1=None,kwargs={}):
-        """
-        """
-
-        # Get the revenue table
-        revenue = self.revenue.copy()
-
-        # Filter for energy and pull out the desired column
-        revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
-
-        if t0 and t1:
-            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
-
-        else:
-            # Get the price data for the given interval
-            t0 = revenue.index.min()
-            t1 = revenue.index.max()
-
         rrp,rrp_mod = self.getRRP(Network,t0,t1)
-        
+        rrp['Version'] = 'Orig'
         # If rrp_mod, combine the two
         if type(rrp_mod) == pd.core.frame.DataFrame:
-            rrp = rrp['Energy'].to_frame('Energy Price (Actual)')
-            rrp_mod = rrp_mod['Energy'].to_frame('Energy Price (Objective)')
-            RRP = pd.concat([rrp,rrp_mod],axis=1)
+            rrp_mod['Version'] = 'Mod'
+            RRP = pd.concat([rrp,rrp_mod])
         else:
-            RRP = rrp['Energy'].to_frame('Energy Price')
+            RRP = rrp
 
-        # Combine
-        toPlot = pd.concat([RRP,revenue],axis=1)
+        RRP_scenario = pd.DataFrame()
+        # Collect the price scenarios we are interested in
+        for scenario in self.marketmeta['Scenario'].unique():
+            RRP_scenario[scenario] = RRP[list(self.marketmeta.loc[self.marketmeta['Scenario'] == scenario,'Market'])].sum(axis=1)
+            
+        # Remove the prices not in the given scenario
+        RRP_scenario = RRP_scenario[[col for col in RRP_scenario.columns if RRP_scenario[col].abs().sum() > 0]]
+        
+        # Get the version
+        RRP_scenario['Version'] = RRP['Version']
+        
+        # Stack RRP
+        RRP_scenario = RRP_scenario.reset_index().set_index(['Timestamp','Version']).stack().reset_index().rename({'level_2':'Scenario',0:'RRP'},axis=1)
 
-        fig = plotlyPivot(
-            toPlot,
-            Scatter=['Revenue'],
-            Line=list(RRP.columns),
-            colorList = plotly.colors.qualitative.Pastel,
-            fill={'Revenue':'tozeroy'},
-            secondary_y=['Revenue'],
-            show=show,
-            opacity=0.4,
-            **kwargs,
-            )
+        # Apply metadata
+        RRP_schema = pd.merge(RRP_scenario,self.marketmeta,how='inner',on='Scenario')
+        
+        return RRP_schema
 
-        return fig
+    
+
+    # def plotOutput(self,Network,t0,t1):
+    #     """
+    #     """
+    #     rrp,rrp_mod = self.getRRP(Network,t0,t1)
+
+        
+
+    #     self.stackRevenue()
+    #     self.stackOperations()
+
+    # def energyRevenuePlot(self,Network,show=True,t0=None,t1=None,kwargs={}):
+    #     """
+    #     """
+
+    #     # Get the revenue table
+    #     revenue = self.revenue.copy()
+
+    #     # Filter for energy and pull out the desired column
+    #     revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
+
+    #     if t0 and t1:
+    #         revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+
+    #     else:
+    #         # Get the price data for the given interval
+    #         t0 = revenue.index.min()
+    #         t1 = revenue.index.max()
+
+    #     rrp,rrp_mod = self.getRRP(Network,t0,t1)
+        
+    #     # If rrp_mod, combine the two
+    #     if type(rrp_mod) == pd.core.frame.DataFrame:
+    #         rrp = rrp['Energy'].to_frame('Energy Price (Actual)')
+    #         rrp_mod = rrp_mod['Energy'].to_frame('Energy Price (Objective)')
+    #         RRP = pd.concat([rrp,rrp_mod],axis=1)
+    #     else:
+    #         RRP = rrp['Energy'].to_frame('Energy Price')
+
+    #     # Combine
+    #     toPlot = pd.concat([RRP,revenue],axis=1)
+
+    #     fig = plotlyPivot(
+    #         toPlot,
+    #         Scatter=['Revenue'],
+    #         Line=list(RRP.columns),
+    #         colorList = plotly.colors.qualitative.Pastel,
+    #         fill={'Revenue':'tozeroy'},
+    #         secondary_y=['Revenue'],
+    #         show=show,
+    #         opacity=0.4,
+    #         **kwargs,
+    #         )
+
+    #     return fig
 
 
     def energyDispatchPlot(self,show=True,t0=None,t1=None,kwargs={}):
@@ -701,19 +734,65 @@ class BESS(Gen):
         
         return fig
 
-    def plotEnergy(self,Network,t0=None,t1=None,dipatch_kwargs={},revenue_kwargs={}):
+    def rrpPlot(self,Network,show=True,t0=None,t1=None):
         """
-        Needs some work to preserve the formatting of revenue and dispatch figures
         """
+        # Process the rrp data into the desired schema
+        RRP_plot = self.rrpSchema(Network,t0=t0,t1=t1)
+        
+        # Construct a plot with plotly express based on just the price
+        fig = px.line(RRP_plot,x='Timestamp',y='RRP',color='Direction',line_dash='Version',facet_row='Category').update_yaxes(matches=None)
+        if show:
+            plot(fig)
 
-        # Get the operations table
-        operations = self.operations.copy()
+    def cooptDispatchPlot(self,show=True,t0=None,t1=None):
+        """
+        """
 
         # Get the revenue table
         revenue = self.revenue.copy()
+        
+        if t0 and t1:
+            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+        
+        revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
+        revenue.loc[revenue['Direction'] == 'LOWER','Dispatch_MW'] = -revenue['Dispatch_MW']
+    
+        fig = px.bar(revenue,x='Timestamp',y='Dispatch_MW',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
+        
+        if show:
+            plot(fig)
+        
+    def cooptRevenuePlot(self,show=True,t0=None,t1=None):
+        """
+        """
 
-        # Filter for energy and pull out the desired column
-        revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
+        # Get the revenue table
+        revenue = self.revenue.copy()
+        
+        if t0 and t1:
+            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+        
+        revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
+    
+        fig = px.bar(revenue,x='Timestamp',y='Revenue_$',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
+        
+        if show:
+            plot(fig)
+
+    # def plotEnergy(self,Network,t0=None,t1=None,dipatch_kwargs={},revenue_kwargs={}):
+    #     """
+    #     Needs some work to preserve the formatting of revenue and dispatch figures
+    #     """
+
+    #     # Get the operations table
+    #     operations = self.operations.copy()
+
+    #     # Get the revenue table
+    #     revenue = self.revenue.copy()
+
+    #     # Filter for energy and pull out the desired column
+    #     revenue = revenue[revenue['Market'] == 'Energy']['Revenue_$'].to_frame('Revenue')
 
 
         # fig = make_subplots(rows=2, cols=1,shared_xaxes=True)

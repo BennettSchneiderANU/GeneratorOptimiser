@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Wed Jul  7 22:39:04 2021
+
+@author: benne
+"""
 import sys
 import os
 path = os.path.join(os.path.dirname(os.path.dirname(__file__)),'src')
@@ -41,13 +47,6 @@ m = Model(sense='MAX')
 bess1.optDispatch(nem,m,t0,t1)
 bess2.optDispatch(nem,m,t0,t1)
 bess3.optDispatch(nem,m,t0,t1)
-
-#%%
-bess3.energyDispatchPlot(t0=t0,t1=t1)
-bess3.rrpPlot(nem,t0=t0,t1=t1)
-bess3.cooptDispatchPlot(t0=t0,t1=t1)
-bess3.cooptRevenuePlot(t0=t0,t1=t1)
-
 #%%
 # bess1.revenue
 # bess1.operations
@@ -87,16 +86,12 @@ def rrpSchema(self,t0=None,t1=None):
     
     return RRP_schema
     
-def plottingSchema(self,t0=None,t1=None):   
+def plottingSchema(self,t0=None,t1=None,category='Energy'):   
     # https://stackoverflow.com/questions/62853539/plotly-how-to-plot-on-secondary-y-axis-with-plotly-express 
     # Process the rrp data into the desired schema
-    RRP_plot = rrpSchema(self,t0=t0,t1=t1)
+    RRP = rrpSchema(self,t0=t0,t1=t1)
     
-    # Construct a plot with plotly express based on just the price
-    fig = px.line(RRP_plot,x='Timestamp',y='RRP',color='Direction',line_dash='Version',facet_row='Category').update_yaxes(matches=None)
-    # plot(fig)
-
-    
+      
     # Get the operations table
     operations = self.operations.copy()
     
@@ -120,8 +115,50 @@ def plottingSchema(self,t0=None,t1=None):
         
     # stackedRevenue = self.stackRevenue()
     
+    
+    # Merge on metadata
+    breakpoint()
     revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
+    # Filter by category 
+    revenue = revenue[revenue['Category'] == category]
+    # Set sign of LOWER to negative
     revenue.loc[revenue['Direction'] == 'LOWER','Dispatch_MW'] = -revenue['Dispatch_MW']
+    # Stack
+    rev_stacked = go.stackData(revenue,values=['Dispatch_MW','Revenue_$'])
+    # add tag for consistency with RRP
+    rev_stacked['Version'] = 'Orig'
+    rev_stacked['Cat'] = 'Revenue'
+    
+    # Repeat for operations
+    operations['Market'] = 'Energy' # ops is always energy
+    operations = pd.merge(operations.reset_index(),self.marketmeta,how='inner',on='Market')
+    # Filter by category 
+    operations = operations[operations['Category'] == category]
+    # Stack
+    ops_stacked = go.stackData(operations,values=['dt_MW','regDt_MW','st_MWh'])
+    # add tag for consistency with RRP
+    ops_stacked['Version'] = 'Orig'
+    ops_stacked['Cat'] = 'Operations'
+    
+    # Same for RRP
+    RRP = RRP[RRP['Category'] == category]
+    RRP['Variable'] = 'RRP'
+    RRP.rename({'RRP':'Value'},axis=1,inplace=True)
+    RRP['Cat'] = 'RRP'
+    
+    toPlot = pd.concat([rev_stacked,ops_stacked,RRP])
+    toPlot = toPlot.pivot_table(columns='Variable',values='Value',index=[col for col in toPlot.columns if col not in ['Variable','Value']]).reset_index()
+    
+    
+    fig = px.line(toPlot,x='Timestamp',y='Value',color='Direction',line_dash='Version',facet_row='Variable').update_yaxes(matches=None)
+    
+    
+    breakpoint()
+    
+    
+    # Construct a plot with plotly express based on just the price
+    fig = px.line(RRP_plot,x='Timestamp',y='RRP',color='Direction',line_dash='Version').update_yaxes(matches=None)
+    # plot(fig)
  
     fig2 = px.bar(revenue,x='Timestamp',y='Dispatch_MW',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
     breakpoint()
