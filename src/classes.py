@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+from numpy.lib.function_base import disp
 import pandas as pd
 import numpy as np
 import datetime as dt
@@ -40,7 +41,7 @@ class NEM(Network):
     """
 
     def __init__(self,path):
-        super(NEM,self).__init__(path)
+        super().__init__(path)
         self.regionStr='REGIONID'
 
     # def loadOpenNEM(self,start,end,region=None):
@@ -85,6 +86,7 @@ class NEM(Network):
         Created on 14/02/2021 by Bennett Schneider 
 
         """
+
         try:
             RRP = self.rawData['Price'].copy()
         except KeyError:
@@ -222,7 +224,7 @@ class Gen(object):
         self.markets = scenarios[self.scenario]
         
         # For storing dispatch results
-        self.results = pd.DataFrame()
+        self.revenue = pd.DataFrame()
         self.operations = pd.DataFrame()
         
         # ModFunc should be reset to None if nan and to a function otherwise
@@ -392,6 +394,7 @@ class Gen(object):
 
             # Pivot the stacked table for convenience going forward
             nPrice.reset_index(inplace=True)
+
             nPrice = pd.pivot_table(nPrice.fillna(999),values='RRP',index=[col for col in nPrice if col not in ['Market','RRP']],columns='Market').reset_index().set_index('Timestamp').rename_axis(None,axis=1)
 
             # logic required to slice out the correct data from the network price record
@@ -441,7 +444,7 @@ class Gen(object):
                 rrp_mod = RRP[RRP['modFunc'] != 'Orig']
             else:
                 errFunc(e)
-        except KeyError as e:
+        except (KeyError,TypeError) as e:
             if self.modFunc:
                 kwargs = self.extractKwargs(Network.procPrice,self.modFunc)
             else:
@@ -449,6 +452,8 @@ class Gen(object):
             RRP = Network.procPrice(self.freq,self.region,t0,t1,True,self.modFunc,**kwargs)
             rrp = RRP[RRP['modFunc'] == 'Orig']
             rrp_mod = RRP[RRP['modFunc'] != 'Orig']
+        except TypeError:
+            errFunc("Reload your Network object!")
     
         # zero columns based on markets
         my_rrp = [rrp,rrp_mod]
@@ -584,8 +589,17 @@ class BESS(Gen):
 
         revenue,operations = horizonDispatch(rrp,m,self.freq,Fh,Di,optfunc=self.optfunc,st0=self.sMax/2,rMax=1,rrp_mod=rrp_mod,**kwargs)
 
-        self.revenue = self.results.append(revenue)
-        self.operations = self.operations.append(operations)
+        if len(self.revenue) == 0:
+            self.revenue = revenue.copy()
+        else:
+            self.revenue = self.revenue[~(self.revenue.index > t0) | ~(self.revenue.index <= t1)] # remove any existing data from current time range
+            self.revenue = self.revenue.append(revenue).sort_index() # append new calculations
+        
+        if len(self.operations) == 0:
+            self.operations = operations.copy()
+        else:
+            self.operations = self.operations[~(self.operations.index > t0) | ~(self.operations.index <= t1)] # remove any existing data from current time range
+            self.operations = self.operations.append(operations).sort_index() # append new calculations
 
     def stackRevenue(self,setIndex=False,load=True):
         """
@@ -614,8 +628,31 @@ class BESS(Gen):
         return stackedOperations
 
     def rrpSchema(self,Network,t0=None,t1=None):
+        """
+        Gets the price signal from the network object and maps on market-specific metadata. Then stacks the data.
+
+        Args:
+            self (Generator):
+              - marketmeta
+
+            Network (Network)
+
+            t0 (datetime. Default=None): Start timestamp (open bound)
+            
+            t1 (datetime. Default=None): End timestamp (closed bound)
+
+        Functions used:
+            classes:
+              - Generator.getRRP()
+
+        Returns:
+            RRP_schema (pandas DataFrame): Stacked version of price dataframe from self.getRRP() with metadata from marketmeta merged on.
+
+        Use this function for pre-processing for plotting.
+
+        Created on 3/07/2021 by Bennett Schneider 
+        """
         # Get the price
-        
         rrp,rrp_mod = self.getRRP(Network,t0,t1)
         rrp['Version'] = 'Orig'
         # If rrp_mod, combine the two
@@ -702,7 +739,7 @@ class BESS(Gen):
     #     return fig
 
 
-    def energyDispatchPlot(self,show=True,t0=None,t1=None,kwargs={}):
+    def plotDispatch(self,Network,show=True,t0=None,t1=None,**kwargs):
         """
         Stacked bar of RegDt_MW and dt_MW
         Filled scatter of storage level (MWh)
@@ -710,75 +747,111 @@ class BESS(Gen):
 
         # Get the operations table
         operations = self.operations.copy()
-        operations = operations.rename({'dt_MW':'Energy dispatch','regDt_MW': 'Reg Energy Dispatch','st_MWh': 'State of Charge'},axis=1)
+        # operations = operations.rename({'dt_MW':'Energy dispatch','regDt_MW': 'Reg Energy Dispatch','st_MWh': 'State of Charge'},axis=1)
         operations = operations[[col for col in operations.columns if operations[col].abs().sum() > 1]] # filter out empty columns
+
+        # Get the revenue table
+        revenue = self.revenue.copy()
 
         if t0 and t1:
             operations = operations[(operations.index > t0) & (operations.index <= t1)]
+            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+        else:
+            t0 = revenue.index.min()
+            t1 = revenue.index.max()
+        breakpoint()
+
+        # Process revenue table
+        dispatch = revenue[['Market','Dispatch_MW']] # Only keep dispatch
+        dispatch = pd.merge(dispatch.reset_index(),self.marketmeta,how='inner',on='Market') # map on metadata
+        dispatch.loc[dispatch['Direction'] == 'LOWER','Dispatch_MW'] = -dispatch['Dispatch_MW'] # set lower markets to negative
+
+        dispatch = dispatch.pivot_table(index='Timestamp',columns='Scenario',values='Dispatch_MW',aggfunc='mean') # pivot by scenario
+        dispatch.drop('Energy',axis=1,inplace=True) # remove energy, as this is made up of dt_MW and regDt_MW
+        dispatch.columns = [f"Dispatch_{col}" for col in dispatch.columns] # rename the columns
+        dispatch = dispatch[[col for col in dispatch if dispatch[col].abs().sum() > 1]] # remove the columns which weren't activated
+
+        bars = [col for col in operations if 'st_MWh' not in col] # all the columns of operations save st_MWh
+        bars.extend(list(dispatch.columns))
+
+        # Get the rrp
+        rrp,rrp_mod = self.getRRP(Network,t0,t1)
+        rrp = rrp[[col for col in rrp if rrp[col].sum() > 0]] # remove empty coluns
+        lines = list(rrp.columns)
+        
+        if rrp_mod:
+            rrp_mod = rrp_mod[[col for col in rrp_mod if rrp_mod[col].sum() > 0]] # remove empty columns
+            rrp_mod.columns = [f"{col}_mod" for col in rrp_mod.columns] # rename mods
+            lines.extend(list(rrp_mod.columns))
+        
+        toPlot = pd.concat([operations,dispatch,rrp,rrp_mod],axis=1)
 
         fig = plotlyPivot(
-            operations,
-            Scatter=['State of Charge'],
-            Bar=[col for col in operations if 'State of Charge' not in col],
+            toPlot,
+            Scatter=['st_MWh'],
+            Line=lines,
+            Bar=bars,
             relative=True,
             colorList = {
                 'Bar': plotly.colors.qualitative.Pastel,
-                'Scatter': list(reversed(plotly.colors.qualitative.Pastel))
+                'Scatter': list(reversed(plotly.colors.qualitative.Pastel)),
+                'Line': plotly.colors.qualitative.Pastel
             },
-            fill={'State of Charge':'tozeroy'},
-            secondary_y=list(operations.columns),
+            fill={'st_MWh':'tozeroy'},
+            secondary_y=lines,
             show=show,
             opacity=0.4,
+            title=self.name,
             **kwargs
             )
         
         return fig
 
-    def rrpPlot(self,Network,show=True,t0=None,t1=None):
-        """
-        """
-        # Process the rrp data into the desired schema
-        RRP_plot = self.rrpSchema(Network,t0=t0,t1=t1)
+    # def rrpPlot(self,Network,show=True,t0=None,t1=None):
+    #     """
+    #     """
+    #     # Process the rrp data into the desired schema
+    #     RRP_plot = self.rrpSchema(Network,t0=t0,t1=t1)
         
-        # Construct a plot with plotly express based on just the price
-        fig = px.line(RRP_plot,x='Timestamp',y='RRP',color='Direction',line_dash='Version',facet_row='Category').update_yaxes(matches=None)
-        if show:
-            plot(fig)
+    #     # Construct a plot with plotly express based on just the price
+    #     fig = px.line(RRP_plot,x='Timestamp',y='RRP',color='Direction',line_dash='Version',facet_row='Category').update_yaxes(matches=None)
+    #     if show:
+    #         plot(fig)
 
-    def cooptDispatchPlot(self,show=True,t0=None,t1=None):
-        """
-        """
+    # def cooptDispatchPlot(self,show=True,t0=None,t1=None):
+    #     """
+    #     """
 
-        # Get the revenue table
-        revenue = self.revenue.copy()
+    #     # Get the revenue table
+    #     revenue = self.revenue.copy()
         
-        if t0 and t1:
-            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+    #     if t0 and t1:
+    #         revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
         
-        revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
-        revenue.loc[revenue['Direction'] == 'LOWER','Dispatch_MW'] = -revenue['Dispatch_MW']
+    #     revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
+    #     revenue.loc[revenue['Direction'] == 'LOWER','Dispatch_MW'] = -revenue['Dispatch_MW']
     
-        fig = px.bar(revenue,x='Timestamp',y='Dispatch_MW',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
+    #     fig = px.bar(revenue,x='Timestamp',y='Dispatch_MW',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
         
-        if show:
-            plot(fig)
+    #     if show:
+    #         plot(fig)
         
-    def cooptRevenuePlot(self,show=True,t0=None,t1=None):
-        """
-        """
+    # def cooptRevenuePlot(self,show=True,t0=None,t1=None):
+    #     """
+    #     """
 
-        # Get the revenue table
-        revenue = self.revenue.copy()
+    #     # Get the revenue table
+    #     revenue = self.revenue.copy()
         
-        if t0 and t1:
-            revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
+    #     if t0 and t1:
+    #         revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
         
-        revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
+    #     revenue = pd.merge(revenue.reset_index(),self.marketmeta,how='inner',on='Market')
     
-        fig = px.bar(revenue,x='Timestamp',y='Revenue_$',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
+    #     fig = px.bar(revenue,x='Timestamp',y='Revenue_$',color='Direction',facet_row='Category',barmode='relative').update_yaxes(matches=None)
         
-        if show:
-            plot(fig)
+    #     if show:
+    #         plot(fig)
 
     # def plotEnergy(self,Network,t0=None,t1=None,dipatch_kwargs={},revenue_kwargs={}):
     #     """

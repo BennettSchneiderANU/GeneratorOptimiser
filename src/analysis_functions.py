@@ -715,7 +715,7 @@ def BESS_COINOR_hurdle(
         
         st0 (float. Default=2): Starting capacity of your BESS in hours.
         
-        eta (float. Default=0.8): One-way efficiency of your BESS.
+        eta (float. Default=0.8): Round trip efficiency of your BESS.
         
         rMax (float. Default=1): Maximum rate of discharge or charge (MW). Default value of 1 essentially yields results in /MW terms.
             This value merely scales up the results and is convenient for unit purposes. It does not affect the optimisation.
@@ -738,14 +738,15 @@ def BESS_COINOR_hurdle(
     
     Created on 14/04/2020 by Bennett Schneider
         
-    """
+    """ 
+    eta1 = np.sqrt(eta) # round-trip to one-way
 
     # Define the key constraining constants based on rmax
     lowerSlope = (lowBreakpoint - enablementMin)/maxAvail  # Upper/Lower Slope Coeff
     upperSlope = (enablementMax - highBreakpoint)/maxAvail # Upper/Lower Slope Coeff
 
 
-    if type(rrp_mod) == pd.core.frame.DataFrame:
+    if (type(rrp_mod) == pd.core.frame.DataFrame) and (len(rrp_mod) > 0):
         optRRP = rrp_mod.copy()
     else:
         optRRP = rrp.copy()
@@ -766,7 +767,7 @@ def BESS_COINOR_hurdle(
             Fr_dist = pd.DataFrame({'RAISE':[RFr],'LOWER':[LFr]},index=[1]) # if None, allow the objective function complete deterministic knowledge of Fr
         else:
             sys.exit("Please enter Fr_dist as either None or a pandas DataFrame, as per the documentation for analysis_functions.BESS_COINOR_hurdle()")
-    
+
     #########################################
     ############# Add variables #############
     #########################################
@@ -828,7 +829,7 @@ def BESS_COINOR_hurdle(
         ct_net = ct[i] + regCt[i]
 
         # Apply the most accurate bess storage model
-        m += st[i] - st[i-1] + hr_frac*(eta*dt_net - ct_net/eta) == 0, f'storage_level_{i}' 
+        m += st[i] - st[i-1] + hr_frac*(dt_net/eta1 - eta1*ct_net) == 0, f'storage_level_{i}' 
 
         # Apply FCAS reg raise constraints. Assume all cont. raise are always bid the same. Neglect ramp constraints. Therefore the following apply:
         m += Reg_Rt[i] <= (enablementMax - dt[i])/upperSlope, f"Upper_RegRaise_cap_{i}"             # (Effective RReg EnablementMax - Energy Target) / Upper Slope Coeff RReg
@@ -845,8 +846,8 @@ def BESS_COINOR_hurdle(
         m += Cont_Lt[i] <= (dt[i] - enablementMin)/lowerSlope, f"Lower_ContLower_cap_{i}"  # (Energy Target - Offer Lxx EnablementMin) / Lower Slope Coeff Lxx
         
         # Joint storage capacity constraint (energy, reg, and cont).
-        m += st[i] >= (hr_frac/eta)*((Reg_Rt[i] + dt[i]) + 2*(Cont_Rt[i])), f"Raise_jointStorageCap_{i}" # assume that energy, reg, and contingency raise are all dispatched at one. Cont can last up to 10mins, not 5
-        m += sMax >= st[i] + eta*hr_frac*((Reg_Lt[i] - dt[i]) + 2*Cont_Lt[i]), f"Lower_jointStorageCap_{i}" # same as above, reverse signs for reg an cont, but keep same sign for dt
+        m += st[i] >= (hr_frac/eta1)*((Reg_Rt[i] + dt[i]) + 2*(Cont_Rt[i])), f"Raise_jointStorageCap_{i}" # assume that energy, reg, and contingency raise are all dispatched at one. Cont can last up to 10mins, not 5
+        m += sMax >= st[i] + eta1*hr_frac*((Reg_Lt[i] - dt[i]) + 2*Cont_Lt[i]), f"Lower_jointStorageCap_{i}" # same as above, reverse signs for reg an cont, but keep same sign for dt
 
 
         ###### Construct Objective #######
@@ -883,8 +884,9 @@ def BESS_COINOR_hurdle(
     #     rrp = rrp.copy()
 
     results = pd.DataFrame(index=rrp.index)
+    
     # res_dict = {'dt_net_MW':[d + r for d,r in zip(dt,regDt)],'dt_MW':dt,'regDt_MW':regDt,'st_MWh':st,'Reg_Rt_MW':Reg_Rt,'Reg_Lt_MW':Reg_Lt,'Cont_Rt_MW':Cont_Rt,'Cont_Lt_MW':Cont_Lt}
-    res_dict = {'dt_MW':dt,'ct_MW':ct,'regDt_MW':regDt,'regCt_MW':regCt,'st_MWh':st,'REGRAISE_MW':Reg_Rt,'REGLOWER_MW':Reg_Lt,'CONTRAISE_MW':Cont_Rt,'CONTLOWER_MW':Cont_Lt}
+    res_dict = {'dt_MW':dt,'ct_MW':ct,'regDt_MW':regDt,'regCt_MW':regCt,'st_MWh':st,'RAISEREG_MW':Reg_Rt,'LOWERREG_MW':Reg_Lt,'RAISECONT_MW':Cont_Rt,'LOWERCONT_MW':Cont_Lt}
     res_dataDict = {}
     for key,var in res_dict.items():
         myVar = [v.x for v in var]
@@ -895,25 +897,27 @@ def BESS_COINOR_hurdle(
     # Combine the charge and discharge results for more intuitive plotting 
     results['dt_MW'] = results['dt_MW'] - results['ct_MW']
     results['regDt_MW'] = results['regDt_MW'] - results['regCt_MW']
+    
+    results.drop(['ct_MW','regCt_MW'],axis=1,inplace=True) # drop charge info now it's been integrated
 
     # Calculate the net energy dispatch
     results['Energy_MW'] = results['dt_MW'] + results['regDt_MW']
 
     # results = pd.concat([rMax*results,rrp],axis=1)
-    
+
     # Splits the profit out by raise/lower Reg/Cont markets
     for col in rrp.columns:
         
         if 'LOWER' in col:
             if 'REG' in col:
-                varStr = 'REGLOWER_MW'
+                varStr = 'LOWERREG_MW'
             else:
-                varStr = 'CONTLOWER_MW'
+                varStr = 'LOWERCONT_MW'
         elif 'RAISE' in col:
             if 'REG' in col:
-                varStr = 'REGRAISE_MW'
+                varStr = 'RAISEREG_MW'
             else:
-                varStr = 'CONTRAISE_MW'
+                varStr = 'RAISECONT_MW'
 
         else:
             varStr = col + '_MW'
@@ -995,7 +999,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
             rrp_frame_mod = None
         
         logging.debug(f" Running {optfunc.__name__} between {rrp_frame.index[0]} and {rrp_frame.index[-1]}")
-
+        # something weird happening with the inputs making rrp_frame_mod and empty dataframe instead of None
         results = optfunc(rrp_frame,m,freq=freq,rrp_mod=rrp_frame_mod,st0=st0,rMax=rMax,**kwargs)
   
         m.clear()
@@ -1014,7 +1018,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
     
     # concatenate all the results together
     results = pd.concat(RESULTS)
-
+    
     # save the index name for later (should be 'Timestamp')
     indexName = results.index.name
 
@@ -1035,7 +1039,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
 
     # modify dispatch so we can map back 1:1 to the original markets
     for rl in ['RAISE','LOWER']:
-        origCol = 'CONT' + rl
+        origCol = rl + 'CONT'
         for market in ['6SEC','60SEC','5MIN']:
             col = rl + market
             dispatch[col] = dispatch[origCol] # we dispatch the same in all lower and raise markets
@@ -1044,6 +1048,7 @@ def horizonDispatch(RRP,m,freq,tFcst,tInt,optfunc=BESS_COINOR,st0=2,rrp_mod=None
     # stack the dataframes and modify the new column names
     dispatch = dispatch.stack().reset_index().rename({'level_1':'Market',0:'Dispatch_MW'},axis=1).set_index([indexName,'Market'])
     revenue = revenue.stack().reset_index().rename({'level_1':'Market',0:'Revenue_$'},axis=1).set_index([indexName,'Market'])
+
     # Concatenate horizontally and set Timestamp as the sole index
     revenue = pd.concat([revenue,dispatch],axis=1).reset_index().set_index(indexName)
     
