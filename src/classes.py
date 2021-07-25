@@ -160,12 +160,12 @@ class NEM(Network):
         return RRP
 
 class Gen(object):
-    def __init__(self,path,region,name,t0,t1,version=''): # Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
+    def __init__(self,workingpath,region,name,t0,t1,configpath=None,version=''): # Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
         """
         Initialises a Gen object.
 
         Args:
-            path (str): Directory you want to save content.
+            workingpath (str): Directory you want to save content.
 
             region (str): Name of the pricing region of the network you want to model.
 
@@ -203,14 +203,14 @@ class Gen(object):
             'ContLowerCoopt': ['Energy','LOWER6SEC','LOWER60SEC','LOWER5MIN']
             }
 
-        self.path = path
+        self.workingpath = workingpath
         self.region = region
         self.name = name
         self.t0 = t0
         self.t1 = t1
         self.version = version
 
-        self.loadConfig(version=version)
+        self.loadConfig(configpath=configpath,version=version)
 
         # If no weighting set, just apply full weighting on Fr
         if self.RFr:
@@ -241,7 +241,7 @@ class Gen(object):
         if self.optfunc:
             self.optfunc = eval(self.optfunc)
 
-    def loadConfig(self,version=''):
+    def loadConfig(self,configpath=None,version=''):
         """
         Reads the master input config containing all settings. Sets the variable in each line as an attribute of self. Uses the value entered under self.name,
         but will fill values not entered with the default settings.
@@ -249,6 +249,8 @@ class Gen(object):
         Args:
             self (Generator):
               - name (str): Name of the generator.
+
+            configpath (str. Default=None): If None, looks for config in the default repo location. Otherwise, looks in the full file path denoted by configpath.
             
             version (str. Default=''): If you have a different version of the input file, it must be placed in the configs folder in the repo and named
                 inputs_[version].csv
@@ -265,7 +267,10 @@ class Gen(object):
         Created on 26/06/2021 by Bennett Schneider
 
         """
-        config_path = os.path.join(os.path.dirname(os.path.dirname((__file__))),'configs','inputs' + version + '.csv') # construct path
+        if configpath:
+            config_path = configpath
+        else:
+            config_path = os.path.join(os.path.dirname(os.path.dirname((__file__))),'configs','inputs' + version + '.csv') # construct path
         config = pd.read_csv(config_path,index_col=0)[['Object','Default',self.name]] # read in the config data as a pandas df
         config['values'] = config[self.name].fillna(config['Default']) # if nan, fill with default values
         self.config = config # assign to self
@@ -310,7 +315,7 @@ class Gen(object):
         """
         # create the pickle path based on the fileName
         name = self.fileName(nowStr=nowStr,selfStr=selfStr,comment=comment)
-        pickle_path = os.path.join(self.path,f"{name}.pkl")
+        pickle_path = os.path.join(self.workingpath,f"{name}.pkl")
         fileObj = open(pickle_path,'wb') # create file object for pickling
         print('\n**************************************')
         print(f'Pickling object to:\n{pickle_path}')
