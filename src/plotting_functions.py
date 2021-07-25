@@ -36,6 +36,7 @@ def plotlyPivot(
     fontsize=16,
     symbol=0,
     opacity=0.9,
+    scatterLineWidth=0,
     legendDict=None,
     xlim=None,
     ylim=None,
@@ -109,6 +110,8 @@ def plotlyPivot(
         symbol (str): Any valid marker str from marker/symbol: https://plotly.com/python/reference/
 
         opacity (float.Default=0.9): Number between 0 and 1 where 0 is transparent, 1 is opaque. 
+
+        scatterLineWidth (int. Default=0): Joins scatter plot with lines.
         
     
     Returns:
@@ -164,7 +167,7 @@ def plotlyPivot(
                     opacity=opacity
                 ),
                 line=dict(
-                    width=0
+                    width=scatterLineWidth
                 )
                 ),
             secondary_y = sy
