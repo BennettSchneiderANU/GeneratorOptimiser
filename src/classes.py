@@ -7,6 +7,7 @@ import numpy as np
 import datetime as dt
 import pickle as pkl
 from ipywidgets import widgets
+import copy
 
 from pandas.core.frame import DataFrame
 # import opennem
@@ -159,7 +160,7 @@ class NEM(Network):
         return RRP
 
 class Gen(object):
-    def __init__(self,path,region, name,version=''): # Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
+    def __init__(self,path,region,name,t0,t1,version=''): # Di='/4',Fh='/4',Fr=0.2,Fr_w=None,freq=30,scenario='RRP',modFunc=None,**kwargs):
         """
         Initialises a Gen object.
 
@@ -205,6 +206,8 @@ class Gen(object):
         self.path = path
         self.region = region
         self.name = name
+        self.t0 = t0
+        self.t1 = t1
         self.version = version
 
         self.loadConfig(version=version)
@@ -345,11 +348,12 @@ class Gen(object):
         # get today's date
         dateStr = exportTimestamp(timeStr=nowStr)
 
-        # Construct name based on other settings
-        name_settings = '_'.join(list(map(str,self.settings.values())))
+        # Get dates
+        start = self.t0.strftime(selfStr)
+        end = self.t1.strftime(selfStr)
 
         # Combine
-        name = f"{dateStr}_{name_settings}"
+        name = f"{dateStr}_{self.name}_{start}-{end}"
 
         # Add comment
         if comment:
@@ -516,14 +520,14 @@ class Gen(object):
         return kwargs
 
 class BESS(Gen):
-    def __init__(self,path,region,name):
+    def __init__(self,path,region,name,t0,t1,**kwargs):
         """
         Same as parent __init__().
         """
         
-        super().__init__(path,region,name)
+        super().__init__(path,region,name,t0,t1,**kwargs)
 
-    def optDispatch(self,Network,m,t0,t1): # ,optfunc=BESS_COINOR,**kwargs):
+    def optDispatch(self,Network,m): # ,optfunc=BESS_COINOR,**kwargs):
         """
         Uses the metadata stored in the caller to set the inputs for horizonDispatch and the bess optimiser (optfunc). This will optimise battery dispatch
         based on RRP. If self.modFunc points to a suitable function, the resulting modified RRP will be stored in Network and used to feed the objective
@@ -537,12 +541,10 @@ class BESS(Gen):
               - optfunc (func)
               - sMax (float)
               - any additional inputs for optfunc
+              - t0 (datetime): Starting datetime.
+              - t1 (datetime): Ending datetime. 
 
             Network (Network): See classes.Network.__init__()
-
-            t0 (datetime): Starting datetime.
-
-            t1 (datetime): Ending datetime. 
 
         Functions used:
             classes:
@@ -568,7 +570,7 @@ class BESS(Gen):
         """
 
         # Pull data from Network such that it can be directly optimised based on the caller's preset settings
-        rrp,rrp_mod = self.getRRP(Network,t0,t1)
+        rrp,rrp_mod = self.getRRP(Network,self.t0,self.t1)
 
         # Get the dispatch interval
         if type(self.Di) == str: # if a string, should be of the form '/num'
@@ -592,13 +594,13 @@ class BESS(Gen):
         if len(self.revenue) == 0:
             self.revenue = revenue.copy()
         else:
-            self.revenue = self.revenue[~(self.revenue.index > t0) | ~(self.revenue.index <= t1)] # remove any existing data from current time range
+            self.revenue = self.revenue[~(self.revenue.index > self.t0) | ~(self.revenue.index <= self.t1)] # remove any existing data from current time range
             self.revenue = self.revenue.append(revenue).sort_index() # append new calculations
         
         if len(self.operations) == 0:
             self.operations = operations.copy()
         else:
-            self.operations = self.operations[~(self.operations.index > t0) | ~(self.operations.index <= t1)] # remove any existing data from current time range
+            self.operations = self.operations[~(self.operations.index > self.t0) | ~(self.operations.index <= self.t1)] # remove any existing data from current time range
             self.operations = self.operations.append(operations).sort_index() # append new calculations
 
     def stackRevenue(self,setIndex=False,load=True):
@@ -757,9 +759,8 @@ class BESS(Gen):
             operations = operations[(operations.index > t0) & (operations.index <= t1)]
             revenue = revenue[(revenue.index > t0) & (revenue.index <= t1)]
         else:
-            t0 = revenue.index.min()
-            t1 = revenue.index.max()
-        breakpoint()
+            t0 = self.t0
+            t1 = self.t1
 
         # Process revenue table
         dispatch = revenue[['Market','Dispatch_MW']] # Only keep dispatch
@@ -786,21 +787,29 @@ class BESS(Gen):
         
         toPlot = pd.concat([operations,dispatch,rrp,rrp_mod],axis=1)
 
+        # pastel, but insert black in 2nd position to serve as regDt, so line and bar markets align
+        line_colors = copy.deepcopy(list(plotly.colors.qualitative.Pastel))
+        scatter_colors = ['rgb(255,0,0)']
+        bar_colors = copy.deepcopy(list(plotly.colors.qualitative.Pastel))
+        if 'regDt_MW' in toPlot.columns:
+            bar_colors.insert(1,'#222A2A')
+
         fig = plotlyPivot(
             toPlot,
             Scatter=['st_MWh'],
             Line=lines,
-            Bar=bars,
+            Bar=bars, 
             relative=True,
             colorList = {
-                'Bar': plotly.colors.qualitative.Pastel,
-                'Scatter': list(reversed(plotly.colors.qualitative.Pastel)),
-                'Line': plotly.colors.qualitative.Pastel
+                'Bar': bar_colors,
+                'Scatter': scatter_colors,
+                'Line': line_colors
             },
-            fill={'st_MWh':'tozeroy'},
+            # fill={'st_MWh':'tozeroy'},
             secondary_y=lines,
             show=show,
-            opacity=0.4,
+            opacity=1,
+            scatterLineWidth=2,
             title=self.name,
             **kwargs
             )
